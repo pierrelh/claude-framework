@@ -37,7 +37,7 @@ SIZES = [("XS", 1), ("S", 3), ("M", 6), ("L", 12), ("XL", math.inf)]
 WORK_TYPES = ["Story", "Task", "Bug"]
 DEFAULT_EFFORT = 2.0
 
-F_STATUS, F_TYPE, F_PRIO, F_SIZE = "Status", "Type", "Priority", "Size"
+F_STATUS, F_TYPE, F_PRIO, F_SIZE = "Status", "Item type", "Priority", "Size"
 F_EFFORT, F_REVIEW, F_ACTUAL = "Agent effort (h)", "Human review (h)", "Actual (h)"
 F_START, F_TARGET, F_AGENT = "Start date", "Target date", "Agent"
 
@@ -613,7 +613,7 @@ def views_report(pid):
             print("  • '+ New view' → Board → Column by: Status. Rename it 'Kanban'.")
         else:
             print("  • '+ New view' → Roadmap → Date fields: 'Start date' / 'Target date'; "
-                  "Group by: Milestone (or Type). Rename it 'Roadmap'.")
+                  "Group by: Milestone (or Item type). Rename it 'Roadmap'.")
     print("  then re-run `fw views-check`.")
     return False
 

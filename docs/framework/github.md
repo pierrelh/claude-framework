@@ -13,7 +13,7 @@
 | Repository | private by default, on your account |
 | Project (v2) | linked to the repository (appears in its *Projects* tab) |
 | Status | Backlog → Ready → In progress → In review → Done |
-| Fields | Type (Epic/Story/Task/Bug), Priority (Must/Should/Could/Won't), Size (XS–XL), Agent effort (h), Human review (h), Actual (h), Start date, Target date, Agent |
+| Fields | Item type (Epic/Story/Task/Bug), Priority (Must/Should/Could/Won't), Size (XS–XL), Agent effort (h), Human review (h), Actual (h), Start date, Target date, Agent. `Type` is reserved by GitHub for built-in issue types, hence `Item type`. |
 | Labels | epic, story, task, bug, blocked, needs-human |
 | Milestones | from the backlog; due date = latest target date of their items |
 | Relations | stories are sub-issues of their epic; dependencies are GitHub "blocked by" links (plus a hidden `fw:depends-on` marker the scheduler reads) |
