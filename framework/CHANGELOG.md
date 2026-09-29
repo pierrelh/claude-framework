@@ -3,6 +3,23 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.3.0 — 2026-09-29
+### Added
+- Structured escalations (`framework/standards/escalation.md`): `fw escalate`, `fw answer`,
+  `fw resolve`, `fw escalations --json`. Humans answer with a `/answer <text>` comment.
+  Contract: `fw schema --json → escalation` (contract_version stays 1 — additive).
+- Cloud runs: `framework/templates/workflows/fw-cloud-run.yml` and
+  `fw workflow install cloud-run` (checks the required secrets). Docs: `docs/framework/cloud-runs.md`.
+### Changed
+- `/fw-work` resumes answered escalations first, escalates through `fw escalate`, prefixes
+  its questions with `[fw:<kind> <id>]`, and never waits for an answer in headless sessions
+  (`FW_HEADLESS=1` / `CI=true`).
+### Security
+- Escalation comments are honoured only from OWNER / MEMBER / COLLABORATOR authors
+  (`escalations.trusted_associations`), ids can't be reopened, marker payloads are escaped.
+- Cloud-run workflow: `fw-cloud-run` environment, no persisted checkout credentials, token
+  scoped to steps, actions pinned to SHAs, refuses public repositories unless `FW_ALLOW_PUBLIC`.
+
 ## 0.2.0 — 2026-09-29
 ### Added
 - `fw schema --json`: versioned machine-readable contract (field names, statuses, markers).

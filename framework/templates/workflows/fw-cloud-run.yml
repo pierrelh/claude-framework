@@ -1,0 +1,79 @@
+# Runs a framework command (/fw-work, /fw-backlog, /fw-status) in GitHub Actions, with Claude Code.
+# Installed by `framework/bin/fw workflow install cloud-run` into .github/workflows/fw-cloud-run.yml.
+# Secrets (Settings → Secrets and variables → Actions):
+#   ANTHROPIC_API_KEY — your Anthropic API key (pay per use).
+#   FW_GH_TOKEN       — a classic personal access token with the repo and project scopes (no workflow
+#                       scope): GITHUB_TOKEN cannot read or edit Projects v2 owned by a personal account.
+# Put both secrets in the "fw-cloud-run" environment (Settings → Environments) — optionally with
+# required reviewers — and protect the default branch. Refuses to run on a public repository unless
+# the repository variable FW_ALLOW_PUBLIC is "true": agents here run without permission prompts and
+# read issue text, so on a public repo treat every issue and comment as untrusted input.
+# Actions are pinned to commit SHAs (resolved 2026-09-29) — update them deliberately.
+# Questions asked by agents end the job with an issue comment (`fw escalate`). Answer with a
+# comment starting with `/answer`, or dispatch this workflow with answer_issue + answer.
+# Docs: docs/framework/cloud-runs.md. Check action versions are current when installing.
+name: fw cloud run
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: Framework command
+        type: choice
+        options: [fw-work, fw-backlog, fw-status]
+        default: fw-work
+        required: true
+      args:
+        description: 'Arguments: "#12", "all", "3", or the need for fw-backlog'
+        type: string
+        required: false
+      answer_issue:
+        description: Issue whose pending question this run answers (optional)
+        type: string
+        required: false
+      answer:
+        description: The answer (optional, with answer_issue)
+        type: string
+        required: false
+
+concurrency:
+  group: fw-cloud-run-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  run:
+    if: ${{ github.event.repository.private || vars.FW_ALLOW_PUBLIC == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    environment: fw-cloud-run
+    env:
+      FW_HEADLESS: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record the answer to a pending question
+        if: ${{ inputs.answer_issue != '' && inputs.answer != '' }}
+        env:
+          GH_TOKEN: ${{ secrets.FW_GH_TOKEN }}
+          ISSUE: ${{ inputs.answer_issue }}
+          ANSWER: ${{ inputs.answer }}
+        run: |
+          case "$ISSUE" in ''|*[!0-9]*) echo "answer_issue must be a number" >&2; exit 1;; esac
+          framework/bin/fw answer "$ISSUE" -- "$ANSWER"
+
+      - uses: anthropics/claude-code-action@8ce9314fa9a404564fa7e954cd84f25bcba2b829 # v1
+        env:
+          GH_TOKEN: ${{ secrets.FW_GH_TOKEN }}
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.FW_GH_TOKEN }}
+          prompt: /${{ inputs.command }} ${{ inputs.args }}
+          claude_args: --permission-mode bypassPermissions --max-turns 300

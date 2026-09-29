@@ -7,6 +7,7 @@ requests and keep this documentation up to date.
 - [Workflow](workflow.md) — from an idea to merged code, step by step
 - [GitHub setup](github.md) — repository, Kanban board, roadmap, fields
 - [Autonomy modes](autonomy.md) — assisted vs fully automatic, and the safety nets
+- [Cloud runs](cloud-runs.md) — run `/fw-work` in GitHub Actions, answer questions from GitHub
 
 ## Daily commands
 | You want to… | Type |
