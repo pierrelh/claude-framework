@@ -1,7 +1,7 @@
 {
   "initialized": false,
   "framework": {
-    "upstream": "https://github.com/pierrelh/claude-template.git",
+    "upstream": "https://github.com/pierrelh/claude-framework.git",
     "branch": "main",
     "version": "0.1.0",
     "template_project": ""
