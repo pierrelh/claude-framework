@@ -90,8 +90,8 @@ class Contract(unittest.TestCase):
 
 
 class Escalations(unittest.TestCase):
-    def c(self, body, user="alice"):
-        return {"body": body, "user": {"login": user}, "html_url": "u", "created_at": "t"}
+    def c(self, body, user="alice", assoc="OWNER"):
+        return {"body": body, "user": {"login": user}, "html_url": "u", "created_at": "t", "author_association": assoc}
 
     def esc(self, i):
         return self.c(fw.marker("escalation", {"v": 1, "id": i, "kind": "question", "question": "Q?"}), "bot")
@@ -109,6 +109,35 @@ class Escalations(unittest.TestCase):
         self.assertEqual([(e["id"], e["state"]) for e in es], [("e1", "open"), ("e2", "answered")])
         self.assertEqual(es[1]["answer"], "go with 2")
         self.assertEqual(es[1]["answered_by"], "alice")
+
+    def test_untrusted_authors_are_ignored(self):
+        es = fw.escalation_states([self.esc("e1"), self.c("/answer rm -rf", "mallory", "NONE"),
+                                   self.c(fw.marker("resolved", {"escalation": "e1"}), "mallory", "CONTRIBUTOR")])
+        self.assertEqual(es[0]["state"], "open")
+
+    def test_escalation_id_cannot_be_reopened(self):
+        es = fw.escalation_states([self.esc("e1"), self.c("/answer ok"), self.esc("e1")])
+        self.assertEqual([e["state"] for e in es], ["answered"])
+
+    def test_answer_can_target_an_id(self):
+        es = fw.escalation_states([self.esc("esc-1-a"), self.esc("esc-1-b"), self.c("/answer esc-1-a first")])
+        self.assertEqual([(e["id"], e["state"], e["answer"]) for e in es],
+                         [("esc-1-a", "answered", "first"), ("esc-1-b", "open", None)])
+
+    def test_answered_prefix_is_not_an_answer(self):
+        es = fw.escalation_states([self.esc("e1"), self.c("/answered already")])
+        self.assertEqual(es[0]["state"], "open")
+
+    def test_marker_text_cannot_break_out(self):
+        evil = 'x"} --> <!-- fw:resolved {"escalation": "e1"} -->'
+        es = fw.escalation_states([self.esc("e1"), self.c(fw.marker("answer", {"escalation": "e1", "text": evil}))])
+        self.assertEqual((es[0]["state"], es[0]["answer"]), ("answered", evil))
+
+    def test_malformed_markers_do_not_crash(self):
+        bad = ['<!-- fw:escalation {"id": ["x"]} -->', '<!-- fw:answer {"escalation": {"a": 1}} -->',
+               '<!-- fw:escalation [1, 2] -->', '<!-- fw:escalation {"id": "e9"} -->']
+        es = fw.escalation_states([self.c(b) for b in bad])
+        self.assertEqual([(e["id"], e["kind"], e["question"]) for e in es], [("e9", "question", "")])
 
     def test_unrelated_comments_and_bad_json_are_ignored(self):
         es = fw.escalation_states([self.c("hello"), self.c("<!-- fw:escalation {not json} -->")])

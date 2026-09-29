@@ -128,6 +128,10 @@ WAIT_RE = re.compile(r"<!--\s*fw:wait-days\s+(\d+(?:\.\d+)?)\s*-->")
 OWNER_RE = re.compile(r"<!--\s*fw:owner\s+(\w+)\s*-->")
 ESC_RE = re.compile(r"<!--\s*fw:(escalation|answer|resolved)\s+(\{.*?\})\s*-->", re.S)
 ESC_KINDS = ("question", "approval", "blocked")
+# Only comments from these authors can open, answer or resolve an escalation: on a public repository
+# anyone can comment, and an answer drives an agent. Override with `escalations.trusted_associations`.
+TRUSTED_ASSOCIATIONS = ("OWNER", "MEMBER", "COLLABORATOR")
+ANSWER_RE = re.compile(r"^/answer(?:\s+(esc-[\w-]+))?(?:\s+([\s\S]*))?$")
 # Version of the machine-readable contract (`fw schema`, `--json` outputs). Bump on breaking change.
 CONTRACT_VERSION = 1
 DEFAULT_STATUS_NAMES = {"todo", "in progress", "done"}
@@ -1453,35 +1457,53 @@ def cmd_schema(a):
 
 # --------------------------------------------------------------------------- escalations
 
-def escalation_states(comments):
-    """Fold an issue's comments into escalations: open → answered → resolved (see standards/escalation.md)."""
+def escalation_states(comments, trusted=TRUSTED_ASSOCIATIONS):
+    """Fold an issue's comments into escalations: open → answered → resolved (see standards/escalation.md).
+    Comments whose `author_association` is not trusted are ignored entirely (anti-forgery)."""
     escs, order = {}, []
     for c in comments:
+        if trusted is not None and c.get("author_association") not in trusted:
+            continue
         body = c.get("body") or ""
+        who = (c.get("user") or {}).get("login")
         found = False
         for kind, raw in ESC_RE.findall(body):
             try:
                 data = json.loads(raw)
             except ValueError:
                 continue
+            if not isinstance(data, dict):
+                continue
             found = True
-            if kind == "escalation" and data.get("id"):
-                data.update(state="open", answer=None, answered_by=None, comment_url=c.get("html_url"),
-                            created_at=c.get("created_at"))
-                escs[data["id"]] = data
-                order.append(data["id"])
-            elif kind == "answer" and data.get("escalation") in escs:
-                e = escs[data["escalation"]]
-                if e["state"] == "open":
-                    e.update(state="answered", answer=data.get("text"), answered_by=(c.get("user") or {}).get("login"))
-            elif kind == "resolved" and data.get("escalation") in escs:
-                escs[data["escalation"]]["state"] = "resolved"
-        if not found and body.lstrip().startswith("/answer"):
-            pending = [i for i in reversed(order) if escs[i]["state"] == "open"]
-            if pending:  # a plain `/answer <text>` comment answers the latest open escalation
-                escs[pending[0]].update(state="answered", answer=body.lstrip()[len("/answer"):].strip(),
-                                        answered_by=(c.get("user") or {}).get("login"))
+            ref = data.get("id") if kind == "escalation" else data.get("escalation")
+            if not isinstance(ref, str):
+                continue
+            if kind == "escalation":
+                if ref in escs:  # an id is never reopened or overwritten
+                    continue
+                data.update(kind=data.get("kind") if data.get("kind") in ESC_KINDS else "question",
+                            question=str(data.get("question") or ""),
+                            options=[str(o) for o in data.get("options") or []] if isinstance(data.get("options"), list) else [],
+                            state="open", answer=None, answered_by=None, comment_url=c.get("html_url"),
+                            created_at=c.get("created_at"), opened_by=who)
+                escs[ref] = data
+                order.append(ref)
+            elif ref in escs and kind == "answer" and escs[ref]["state"] == "open":
+                escs[ref].update(state="answered", answer=str(data.get("text") or ""), answered_by=who)
+            elif ref in escs and kind == "resolved":
+                escs[ref]["state"] = "resolved"
+        m = None if found else ANSWER_RE.match(body.strip())
+        if m:
+            target = m.group(1)
+            pending = [i for i in reversed(order) if escs[i]["state"] == "open" and (not target or i == target)]
+            if pending:  # `/answer <text>` → latest open escalation; `/answer esc-… <text>` → that one
+                escs[pending[0]].update(state="answered", answer=(m.group(2) or "").strip(), answered_by=who)
     return [escs[i] for i in order]
+
+
+def trusted_associations():
+    t = dig(cfg(), "escalations.trusted_associations")
+    return tuple(t) if isinstance(t, list) and t else TRUSTED_ASSOCIATIONS
 
 
 def issue_comments(repo, number):
@@ -1495,20 +1517,32 @@ def issue_comments(repo, number):
 
 
 def marker(kind, data):
-    return f"<!-- fw:{kind} {json.dumps(data, ensure_ascii=False)} -->"
+    # Escape <, > and & so user text can never close the HTML comment or fake another marker.
+    raw = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    return f"<!-- fw:{kind} {raw} -->"
 
 
 def set_needs_human(repo, number, on):
     if on:
-        rest("POST", f"repos/{repo}/issues/{number}/labels", {"labels": ["needs-human"]}, check=False)
+        ok = rest("POST", f"repos/{repo}/issues/{number}/labels", {"labels": ["needs-human"]}, check=False)
     else:
-        rest("DELETE", f"repos/{repo}/issues/{number}/labels/needs-human", check=False)
+        ok = rest("DELETE", f"repos/{repo}/issues/{number}/labels/needs-human", check=False)
+    if ok is None and on:
+        warn(f"could not add the needs-human label to #{number} — check the token's issues permission")
+
+
+def states_for(ctx, issue):
+    return escalation_states(issue_comments(ctx["repo"], issue), trusted_associations())
 
 
 def cmd_escalate(a):
     ctx = gh_ctx()
-    esc = {"v": 1, "id": f"esc-{a.issue}-{dt.datetime.now().strftime('%Y%m%d%H%M%S')}", "kind": a.kind,
-           "issue": a.issue, "question": a.question, "options": a.option or [], "recommended": a.recommended,
+    options = a.option or []
+    if a.recommended is not None and not 0 <= a.recommended < len(options):
+        die(f"--recommended must be between 0 and {len(options) - 1}")
+    esc = {"v": 1, "id": f"esc-{a.issue}-{dt.datetime.now().strftime('%Y%m%d%H%M%S')}-{os.urandom(2).hex()}",
+           "kind": a.kind,
+           "issue": a.issue, "question": a.question, "options": options, "recommended": a.recommended,
            "multi": a.multi, "pr": a.pr, "source": a.source}
     lines = [marker("escalation", esc), f"**🙋 Needs you — {a.kind}**" + (f" (PR #{a.pr})" if a.pr else ""), "",
              a.question, ""]
@@ -1517,7 +1551,7 @@ def cmd_escalate(a):
     for n, o in enumerate(esc["options"]):
         lines.append(f"{n + 1}. {o}" + (" *(recommended)*" if a.recommended == n else ""))
     lines += ["", "_Answer with a comment starting with `/answer`, e.g. `/answer "
-              + (esc["options"][a.recommended or 0] if esc["options"] else "yes") + "`._"]
+              + (options[a.recommended or 0] if options else "yes") + f"` (or `/answer {esc['id']} …`)._"]
     c = rest("POST", f"repos/{ctx['repo']}/issues/{a.issue}/comments", {"body": "\n".join(lines)})
     set_needs_human(ctx["repo"], a.issue, True)
     esc["comment_url"] = c["html_url"]
@@ -1525,7 +1559,7 @@ def cmd_escalate(a):
 
 
 def find_escalation(ctx, issue, esc_id, states):
-    escs = [e for e in escalation_states(issue_comments(ctx["repo"], issue)) if e["state"] in states]
+    escs = [e for e in states_for(ctx, issue) if e["state"] in states]
     if esc_id:
         escs = [e for e in escs if e["id"] == esc_id]
     return escs[-1] if escs else die(f"#{issue}: no {'/'.join(states)} escalation" + (f" {esc_id}" if esc_id else ""))
@@ -1547,11 +1581,11 @@ def cmd_resolve(a):
         body = marker("answer", {"v": 1, "escalation": e["id"], "text": a.answer}) + "\n" + body + \
             f"\n**Answer:** {a.answer}"
     rest("POST", f"repos/{ctx['repo']}/issues/{a.issue}/comments", {"body": body})
-    still_open = [x for x in escalation_states(issue_comments(ctx["repo"], a.issue)) if x["state"] != "resolved"]
-    if not still_open:
+    after = states_for(ctx, a.issue)
+    if all(x["state"] == "resolved" for x in after):
         set_needs_human(ctx["repo"], a.issue, False)
-    print(json.dumps({"escalation": e["id"], "issue": a.issue, "state": "resolved",
-                      "answer": a.answer or e.get("answer")}))
+    rec = next((x for x in after if x["id"] == e["id"]), e)
+    print(json.dumps({"escalation": e["id"], "issue": a.issue, "state": rec["state"], "answer": rec.get("answer")}))
 
 
 def cmd_escalations(a):
@@ -1559,17 +1593,22 @@ def cmd_escalations(a):
     if a.issue:
         numbers = [a.issue]
     else:
-        numbers = [i["number"] for i in rest("GET", f"repos/{ctx['repo']}/issues?labels=needs-human&state=open&per_page=100")
-                   if "pull_request" not in i]
+        numbers, page = [], 1
+        while True:
+            batch = rest("GET", f"repos/{ctx['repo']}/issues?labels=needs-human&state=open&per_page=100&page={page}") or []
+            numbers += [i["number"] for i in batch if "pull_request" not in i]
+            if len(batch) < 100:
+                break
+            page += 1
     states = {"open", "answered"} if not a.all else {"open", "answered", "resolved"}
-    out = [e for n in numbers for e in escalation_states(issue_comments(ctx["repo"], n)) if e["state"] in states]
+    out = [e for n in numbers for e in states_for(ctx, n) if e["state"] in states]
     if a.json:
         print(json.dumps(out, indent=2, ensure_ascii=False))
         return
     if not out:
         print("No pending escalation.")
     for e in out:
-        print(f"#{e['issue']:<5} {e['state']:<9} {e['kind']:<9} {e['question'][:70]}"
+        print(f"#{e.get('issue', '?'):<5} {e['state']:<9} {e['kind']:<9} {e['question'][:70]}"
               + (f"  → {e['answer'][:40]}" if e.get("answer") else ""))
 
 
