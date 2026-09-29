@@ -1,0 +1,37 @@
+# How the framework works
+
+This project is driven by an AI agent team inside Claude Code. You describe needs; the
+agents turn them into GitHub issues, plan them on a roadmap, implement them through pull
+requests and keep this documentation up to date.
+
+- [Workflow](workflow.md) — from an idea to merged code, step by step
+- [GitHub setup](github.md) — repository, Kanban board, roadmap, fields
+- [Autonomy modes](autonomy.md) — assisted vs fully automatic, and the safety nets
+
+## Daily commands
+| You want to… | Type |
+|---|---|
+| Know where things stand | `/fw-status` |
+| Make progress | `/fw-work` (one story) · `/fw-work all` (chain, auto mode) |
+| Add a feature or report a bug | `/fw-backlog <your words>` |
+| Re-estimate or re-plan | `/fw-plan` |
+| Change the agent team | `/fw-team` |
+| Refresh the docs | `/fw-docs` |
+| Check your machine / GitHub access | `/fw-doctor` |
+| Get the latest framework | `/fw-update` |
+
+## What lives where
+| Path | Owner | Content |
+|---|---|---|
+| `framework/` | template | CLI (`framework/bin/fw`), hooks, standards, templates |
+| `.claude/skills/fw-*` | template | The `/fw-*` commands |
+| `docs/framework/` | template | This documentation |
+| `.claude/agents/` | project | The agent team |
+| `.fw/` | project | Config, backlog batches, key → issue mapping |
+| `CLAUDE.md`, `docs/` | project | Knowledge for agents and humans |
+
+Template-owned files are replaced by `/fw-update`; don't edit them in a project.
+
+## The `fw` CLI
+Skills call `framework/bin/fw` for everything touching the GitHub project, so behaviour is
+deterministic. You can use it too: `framework/bin/fw -h`.

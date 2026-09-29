@@ -1,0 +1,62 @@
+{
+  "language": "en",
+  "milestones": [
+    { "key": "M1", "title": "MVP", "description": "First usable release for early customers" }
+  ],
+  "epics": [
+    {
+      "key": "E1", "title": "Project foundations", "milestone": "M1", "priority": "Must",
+      "goal": "A running, tested, continuously integrated skeleton that every story builds on",
+      "measure": "CI green on main; a new developer runs the app in under 10 minutes"
+    },
+    {
+      "key": "E2", "title": "Account management", "milestone": "M1", "priority": "Must",
+      "goal": "Customers can create and recover their account on their own",
+      "measure": "Support tickets about account access < 5 per month",
+      "out_of_scope": ["Social login", "Two-factor authentication"]
+    }
+  ],
+  "stories": [
+    {
+      "key": "T-1", "type": "Task", "epic": "E1", "priority": "Must",
+      "title": "Set up the walking skeleton (layout, tests, lint, CI)",
+      "description": "Create the project layout, dependency management, a health-check endpoint, the test runner, the linter/static analysis and a CI workflow running them on every pull request.",
+      "acceptance_criteria": [
+        "The health-check endpoint returns HTTP 200 with the application version",
+        "`make test` and `make lint` run locally and in CI; CI is required on pull requests",
+        "CLAUDE.md lists the exact install/run/test/lint commands"
+      ],
+      "agent_hours": 3, "review_hours": 0.5, "size": "M", "agent": "php-developer"
+    },
+    {
+      "key": "US-1", "type": "Story", "epic": "E2", "priority": "Must",
+      "title": "Sign up with email and password",
+      "persona": "new visitor", "want": "to create an account with my email and a password",
+      "benefit": "I can save my data and come back later",
+      "context": "Passwords follow the OWASP ASVS L1 rules. Email confirmation is required before first login.",
+      "acceptance_criteria": [
+        { "given": "a valid email and a password of 12+ characters", "when": "I submit the sign-up form", "then": "my account is created and a confirmation email is sent" },
+        { "given": "an email already registered", "when": "I submit the form", "then": "I see a neutral message and no second account is created" },
+        { "given": "a password shorter than 12 characters", "when": "I submit the form", "then": "the form explains the rule and nothing is saved" }
+      ],
+      "measure": "80 % of started sign-ups are completed; 0 accounts with unconfirmed email can log in",
+      "technical_notes": "Hash with the framework's default password hasher (argon2id). Rate-limit the endpoint.",
+      "out_of_scope": ["Password strength meter"],
+      "agent_hours": 4, "review_hours": 0.5, "size": "M", "agent": "php-developer",
+      "depends_on": ["T-1"]
+    },
+    {
+      "key": "US-2", "type": "Story", "epic": "E2", "priority": "Should",
+      "title": "Reset a forgotten password by email",
+      "persona": "registered customer", "want": "to receive a reset link by email",
+      "benefit": "I regain access without contacting support",
+      "acceptance_criteria": [
+        { "given": "a registered email", "when": "I request a reset", "then": "I receive a single-use link valid for 30 minutes" },
+        { "given": "an expired or used link", "when": "I open it", "then": "I am invited to request a new one" }
+      ],
+      "measure": "95 % of resets completed in under 2 minutes",
+      "agent_hours": 3, "review_hours": 0.5, "size": "M", "agent": "php-developer",
+      "depends_on": ["US-1"]
+    }
+  ]
+}

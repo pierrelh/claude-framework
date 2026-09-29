@@ -1,0 +1,14 @@
+{
+  "initialized": false,
+  "framework": {
+    "upstream": "",
+    "branch": "main",
+    "version": "0.1.0",
+    "template_project": ""
+  },
+  "capacity": {
+    "hours_per_day": 6,
+    "parallel_lanes": 1,
+    "workdays": [1, 2, 3, 4, 5]
+  }
+}

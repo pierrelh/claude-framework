@@ -1,0 +1,39 @@
+name: User story
+description: A need from a user's point of view (it will be refined and estimated by the agents)
+labels: ["story"]
+body:
+  - type: input
+    id: persona
+    attributes:
+      label: As a…
+      placeholder: registered customer
+    validations:
+      required: true
+  - type: textarea
+    id: want
+    attributes:
+      label: I want…
+    validations:
+      required: true
+  - type: textarea
+    id: benefit
+    attributes:
+      label: So that…
+    validations:
+      required: true
+  - type: textarea
+    id: criteria
+    attributes:
+      label: Acceptance criteria
+      description: Given … When … Then … (one per line; include an error case)
+    validations:
+      required: true
+  - type: input
+    id: measure
+    attributes:
+      label: Success measure
+      placeholder: 95 % of resets completed in under 2 minutes
+  - type: textarea
+    id: notes
+    attributes:
+      label: Context, constraints, out of scope

@@ -1,0 +1,19 @@
+# framework
+.claude/settings.local.json
+.fw/local/
+docs/.obsidian/workspace*.json
+docs/.obsidian/cache
+site/
+__pycache__/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# secrets
+.env
+.env.*
+!.env.example

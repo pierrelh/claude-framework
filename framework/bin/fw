@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Thin wrapper so skills and humans can call `framework/bin/fw <command>`.
+exec python3 "$(dirname "$0")/fw.py" "$@"

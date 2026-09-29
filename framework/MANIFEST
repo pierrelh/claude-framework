@@ -1,0 +1,19 @@
+# Which files belong to whom. Patterns use fnmatch (`*` also matches `/`).
+#
+# owned    — belongs to the framework: copied by `fw install`, overwritten by `fw update`.
+#            Never customise these in a project; change the upstream template instead.
+# scaffold — starting point for the project: copied by `fw install` only when missing,
+#            never touched by `fw update`. The project owns them after that.
+
+owned framework/*
+owned .claude/skills/fw-*
+owned docs/framework/*
+
+scaffold CLAUDE.md
+scaffold .claude/settings.json
+scaffold .claude/agents/.gitkeep
+scaffold .fw/config.json
+scaffold .github/ISSUE_TEMPLATE/*
+scaffold .github/pull_request_template.md
+scaffold docs/*
+scaffold mkdocs.yml
