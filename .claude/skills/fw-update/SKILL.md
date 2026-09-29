@@ -7,7 +7,8 @@ disable-model-invocation: true
 # /fw-update
 
 1. `framework/bin/fw config get framework` — if `upstream` is empty, ask the user for the
-   template's git URL and `framework/bin/fw config set framework.upstream <url>`.
+   template's git URL (default: `https://github.com/pierrelh/claude-framework.git`) and run
+   `framework/bin/fw config set framework.upstream <url>`.
 2. Preview: `framework/bin/fw update` (dry run: version change, changed and removed files).
    Summarise it for the user; if the upstream has a CHANGELOG, show the relevant entries.
 3. With the user's OK: clean tree required →

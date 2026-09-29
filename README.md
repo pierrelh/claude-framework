@@ -1,4 +1,6 @@
-# Blank — an AI project framework for Claude Code
+# Claude Framework — an AI project framework for Claude Code
+
+Repository: <https://github.com/pierrelh/claude-framework>
 
 A project template where an **AI agent team** runs day-to-day project management and
 delivery with you: from a need (precise or deliberately vague) to qualified GitHub issues,
@@ -29,16 +31,19 @@ a Kanban board and a roadmap, then to reviewed, tested, documented pull requests
 
 ## Start a new project
 ```bash
-# Option A — on GitHub: "Use this template" → clone your new repository
-# Option B — clone the template directly
-git clone <template-url> my-project && cd my-project
+# Option A (recommended) — https://github.com/pierrelh/claude-framework → "Use this template"
+#   → create your repository, then clone it:
+gh repo create my-project --template pierrelh/claude-framework --private --clone && cd my-project
+# Option B — clone the template directly (/fw-init offers a fresh git history)
+git clone https://github.com/pierrelh/claude-framework.git my-project && cd my-project
 claude
 > /fw-init I want to build …
 ```
 
 ## Attach an existing project
 ```bash
-python3 /path/to/blank/framework/bin/fw.py install /path/to/existing-project
+git clone https://github.com/pierrelh/claude-framework.git ~/claude-framework   # once
+python3 ~/claude-framework/framework/bin/fw.py install /path/to/existing-project
 cd /path/to/existing-project && claude
 > /fw-init
 ```
