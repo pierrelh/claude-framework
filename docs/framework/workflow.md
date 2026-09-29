@@ -39,4 +39,15 @@ qualified items attached to the right epic, estimates them and re-plans.
 
 ## 4. Estimates
 Hours of agent work + hours of your review, sizes XS–L (XL must be split). Actual time is
-recorded when a story is done, and `/fw-status` shows how accurate estimates are.
+recorded when a story is done, and `/fw-status` shows how accurate estimates are. Tasks only
+you can do are `owner: human` (they don't take agent time) and can carry `wait_days` for
+calendar waiting (store review, account approval).
+
+## 5. Machine-readable contract (for tools and apps)
+Tools built on the framework read it through a versioned contract instead of parsing text:
+- `fw schema --json` — field names, statuses, priorities, labels, body markers,
+  `contract_version` and `framework_version`;
+- `fw status --json`, `fw next --json`, `fw doctor --json`.
+`contract_version` changes only on a breaking change; see `framework/CHANGELOG.md`.
+`fw start` refuses an item that is already in progress (exit code 3), so two machines or a
+machine and a cloud run never take the same story.

@@ -40,7 +40,9 @@ they chose so). Keys, field names and code identifiers stay in English.
 | `agent_hours` / `review_hours` / `size` | See [estimation.md](estimation.md). |
 | `agent` | Name of the implementing agent from `.claude/agents/`. |
 | `priority` | MoSCoW: `Must`, `Should`, `Could`, `Won't`. |
-| `depends_on` | Keys of this file or `#123` for existing issues. |
+| `depends_on` | Keys of this file or `#123` for existing issues. Avoid depending on an item of a *later* milestone (`fw backlog-validate` warns). |
+| `owner` | `agent` (default) or `human` — work only the user can do (create an account, choose a name, legal validation). Human tasks get the `needs-human` label, no agent, `agent_hours` may be 0 and `review_hours` is the user's own time. |
+| `wait_days` | Workdays of waiting after the work is done, on nobody's time (store review, account approval, an answer from a third party). Delays dependents in the roadmap. |
 
 ## Splitting patterns (when a story is too big)
 By workflow step · by business rule · happy path first then errors · by data variation ·

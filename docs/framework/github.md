@@ -29,7 +29,14 @@ GitHub's API cannot create project views. After setup, open the project and add:
 in `framework.template_project` of the template's `.fw/config.json`. New projects are then
 *copied* from it (views included) instead of created empty.
 
+## Re-running the setup
+`fw github-setup` saves the project in `.fw/config.json` as soon as it exists, so a failure
+later in the setup never leaves an orphan project: re-run the same command and it reuses it.
+To attach an existing project explicitly: `fw github-setup --repo <owner/name> --project <number>`.
+
 ## If the Status columns stay "Todo / In Progress / Done"
-Customising the built-in Status field through the API may be refused depending on GitHub's
-API version. The framework then maps its statuses onto the defaults automatically; you can
-add *Backlog*, *Ready* and *In review* by hand in the project settings.
+The setup replaces GitHub's default columns with Backlog / Ready / In progress / In review /
+Done whenever it finds the defaults. On a project that already has items, run
+`fw github-setup --fix-status`: it records every item's status, replaces the options and
+restores them (*Todo* items become *Ready* or *Backlog* depending on their dependencies).
+If the API refuses, the framework maps its statuses onto the defaults automatically.

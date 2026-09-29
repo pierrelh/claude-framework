@@ -124,6 +124,11 @@ HEADINGS = {
     },
 }
 DEPS_RE = re.compile(r"<!--\s*fw:depends-on\s+([#\d,\s]+?)\s*-->")
+WAIT_RE = re.compile(r"<!--\s*fw:wait-days\s+(\d+(?:\.\d+)?)\s*-->")
+OWNER_RE = re.compile(r"<!--\s*fw:owner\s+(\w+)\s*-->")
+# Version of the machine-readable contract (`fw schema`, `--json` outputs). Bump on breaking change.
+CONTRACT_VERSION = 1
+DEFAULT_STATUS_NAMES = {"todo", "in progress", "done"}
 
 
 # --------------------------------------------------------------------------- helpers
@@ -241,6 +246,23 @@ def parse_deps(body):
     return [int(x) for x in re.findall(r"\d+", m.group(1))] if m else []
 
 
+def parse_wait(body):
+    m = WAIT_RE.search(body or "")
+    return float(m.group(1)) if m else 0.0
+
+
+def is_human(item):
+    """Human-owned work (backlog `owner: human` → `fw:owner human` marker). The `needs-human` label alone
+    is not enough: it also flags agent work paused on a decision, which keeps its agent effort."""
+    m = OWNER_RE.search(item.get("body") or "")
+    return bool(m and m.group(1) == "human")
+
+
+def framework_version():
+    f = ROOT / "framework" / "VERSION"
+    return f.read_text().strip() if f.exists() else "0"
+
+
 def canon_status(name):
     n = (name or "").strip().lower()
     return {"todo": "ready", "to do": "ready", "doing": "in progress", "review": "in review"}.get(n, n or "backlog")
@@ -333,6 +355,7 @@ def load_items(ctx):
                             it[name] = fv[k]
                             break
             it["deps"] = parse_deps(it["body"])
+            it["wait_days"] = parse_wait(it["body"])
             it["status"] = canon_status(it.get(F_STATUS))
             items.append(it)
         if not conn["pageInfo"]["hasNextPage"]:
@@ -516,6 +539,10 @@ def owner_node(login):
 
 
 def cmd_github_setup(a):
+    if a.restore_status:
+        before = load_json(LOCAL / "status-backup.json", None) or die("no .fw/local/status-backup.json")
+        restore_statuses(gh_ctx(), before)
+        return
     c = cfg()
     g = c.setdefault("github", {})
     login = gh("api", "user", "--jq", ".login").stdout.strip()
@@ -539,7 +566,13 @@ def cmd_github_setup(a):
     owner_id, owner_type = owner_node(owner)
     title = a.title or r["name"]
     created = False
-    if g.get("project_id") and g.get("repo") == repo and not a.new_project:
+    if a.project:
+        o_type = owner_type
+        proj = graphql("query($l:String!,$n:Int!){ %s(login:$l){ projectV2(number:$n){ id number url } } }" % o_type,
+                       l=owner, n=int(a.project))[o_type]["projectV2"] or die(f"project {owner}/{a.project} not found")
+        pid, number, url = proj["id"], proj["number"], proj["url"]
+        print(f"✔ project reused (--project): {url}")
+    elif g.get("project_id") and g.get("repo") == repo and not a.new_project:
         pid, number, url = g["project_id"], g["project_number"], g["project_url"]
         print(f"✔ project reused: {url}")
     else:
@@ -561,6 +594,11 @@ def cmd_github_setup(a):
             print(f"✔ project created: {proj['url']}")
         pid, number, url = proj["id"], proj["number"], proj["url"]
 
+    # Save right away: a failure in the steps below must not orphan the project (a re-run reuses it).
+    g.update(owner=owner, owner_type=owner_type, repo=repo, repo_id=r["node_id"], project_id=pid,
+             project_number=number, project_url=url, default_branch=r.get("default_branch") or "main")
+    save_json(CONFIG, c)
+
     graphql(LINK_Q, check=False, p=pid, r=r["node_id"])
     print(f"✔ project linked to {repo}")
 
@@ -575,7 +613,15 @@ def cmd_github_setup(a):
                 o=[{"name": n, "color": col, "description": ""} for n, col in opts] if opts else None)
         print(f"✔ field created: {fname}")
 
-    if created:
+    current = {n.lower() for n in fields[F_STATUS]["options"]}
+    if created or a.fix_status or current == DEFAULT_STATUS_NAMES:
+        # Replacing the options drops every item's Status value: remember them and restore after.
+        before = [] if created else load_items({"project_id": pid, "repo": repo})
+        if before:
+            backup = LOCAL / "status-backup.json"
+            save_json(backup, before)
+            print(f"✔ statuses backed up to {backup.relative_to(ROOT)} "
+                  "(if the restore fails: `fw github-setup --restore-status`)")
         wanted = [{"name": n, "color": col, "description": d} for n, col, d in STATUS_OPTIONS]
         ok = graphql("""mutation($f:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]){
             updateProjectV2Field(input:{fieldId:$f,singleSelectOptions:$o}){
@@ -583,6 +629,7 @@ def cmd_github_setup(a):
                      check=False, f=fields[F_STATUS]["id"], o=wanted)
         if ok:
             print("✔ status columns: " + " → ".join(n for n, _, _ in STATUS_OPTIONS))
+            restore_statuses({"project_id": pid, "repo": repo}, before)
         else:
             warn("could not customise Status options through the API; defaults (Todo / In Progress / Done) are "
                  "kept and mapped automatically. Optional: add Backlog, Ready and In review in the project settings.")
@@ -591,11 +638,24 @@ def cmd_github_setup(a):
         gh("label", "create", lname, "--color", color, "--description", desc, "--force", "-R", repo, check=False)
     print("✔ labels: " + ", ".join(n for n, _, _ in LABELS))
 
-    g.update(owner=owner, owner_type=owner_type, repo=repo, repo_id=r["node_id"], project_id=pid,
-             project_number=number, project_url=url, default_branch=r.get("default_branch") or "main")
-    save_json(CONFIG, c)
     print(f"✔ saved to {CONFIG.relative_to(ROOT)}\n")
     views_report(pid)
+
+
+def restore_statuses(ctx, before):
+    """Re-apply statuses after the Status options were replaced; Todo splits into Ready/Backlog by dependencies."""
+    if not before:
+        return
+    fields = project_fields(ctx["project_id"])
+    closed = {i["number"] for i in before if i["state"] == "CLOSED" or i["status"] == "done"}
+    for i in before:
+        st = "done" if i["number"] in closed else i["status"]
+        if st in ("ready", "backlog") and i.get(F_TYPE) != "Epic":
+            st = "ready" if all(d in closed for d in i["deps"]) else "backlog"
+        elif st in ("ready", "backlog"):
+            st = "backlog"
+        set_item_field(ctx, fields, i["item_id"], F_STATUS, st)
+    print(f"✔ status restored on {len(before)} item(s)")
 
 
 def views_report(pid):
@@ -737,8 +797,20 @@ def validate_backlog(b, state):
         except (TypeError, ValueError):
             errors.append(f"{k}: agent_hours / review_hours must be numbers")
             eff = rev = 0
-        if eff <= 0:
-            errors.append(f"{k}: agent_hours must be > 0")
+        human = s.get("owner") == "human"
+        if s.get("owner") not in (None, "agent", "human"):
+            errors.append(f"{k}: owner must be 'agent' or 'human'")
+        if eff < 0 or (eff == 0 and not human):
+            errors.append(f"{k}: agent_hours must be > 0 (or 0 with \"owner\": \"human\")")
+        if human and eff + rev <= 0:
+            errors.append(f"{k}: a human task needs review_hours > 0 (the user's own time)")
+        if human and s.get("agent"):
+            warns.append(f"{k}: human task with an agent — the agent is ignored")
+        try:
+            if float(s.get("wait_days", 0)) < 0:
+                errors.append(f"{k}: wait_days must be >= 0")
+        except (TypeError, ValueError):
+            errors.append(f"{k}: wait_days must be a number")
         if rev < 0:
             errors.append(f"{k}: review_hours must be >= 0")
         expected = size_for(eff + rev)
@@ -746,11 +818,25 @@ def validate_backlog(b, state):
             errors.append(f"{k}: XL ({eff + rev:g} h) is too big — split it into smaller stories")
         elif s.get("size") and s["size"] != expected:
             warns.append(f"{k}: size {s['size']} but {eff + rev:g} h suggests {expected}")
-        if s.get("agent") and agents and s["agent"] not in agents:
+        if s.get("agent") and agents and s["agent"] not in agents and not human:
             warns.append(f"{k}: agent '{s['agent']}' has no file in .claude/agents/")
         for d in as_list(s.get("depends_on")):
             if d not in stories and ref_number(d, done) is None:
                 errors.append(f"{k}: unknown dependency '{d}'")
+
+    # a dependency on a later milestone delays this one: usually a misplaced item
+    ms_rank = {m.get("key"): n for n, m in enumerate(b.get("milestones", []))}
+
+    def ms_of(st):
+        return st.get("milestone") or (epics.get(st.get("epic")) or {}).get("milestone")
+
+    for k, st in stories.items():
+        mine = ms_rank.get(ms_of(st))
+        for d in as_list(st.get("depends_on")):
+            theirs = ms_rank.get(ms_of(stories.get(d) or {}))
+            if mine is not None and theirs is not None and theirs > mine:
+                warns.append(f"{k} ({ms_of(st)}) depends on {d} from a later milestone ({ms_of(stories[d])}) "
+                             f"— move {d} earlier or drop the dependency")
 
     # cycle detection among the stories of this file
     graph = {k: [d for d in as_list(s.get("depends_on")) if d in stories] for k, s in stories.items()}
@@ -826,7 +912,12 @@ def render_story(s, h, dep_numbers):
     eff, rev = float(s["agent_hours"]), float(s.get("review_hours", 0))
     out += [f"## {h['estimate']}", f"| {h['effort']} | {h['review']} | {h['size']} | {h['agent']} |",
             "|---|---|---|---|",
-            f"| {eff:g} h | {rev:g} h | {s.get('size') or size_for(eff + rev)} | {s.get('agent') or '—'} |", ""]
+            f"| {eff:g} h | {rev:g} h | {s.get('size') or size_for(eff + rev)} | "
+            f"{'human' if s.get('owner') == 'human' else s.get('agent') or '—'} |", ""]
+    if s.get("owner") == "human":
+        out += ["<!-- fw:owner human -->"]
+    if float(s.get("wait_days", 0) or 0) > 0:
+        out += [f"<!-- fw:wait-days {float(s['wait_days']):g} -->"]
     if dep_numbers:
         out += [f"## {h['deps']}"] + [f"- {h['blocked_by']} #{n}" for n in dep_numbers] + [""]
         out += [f"<!-- fw:depends-on {','.join(str(n) for n in dep_numbers)} -->"]
@@ -936,9 +1027,13 @@ def cmd_backlog_apply(a):
         epic = epics.get(s.get("epic")) or {}
         ms = milestone_number(s.get("milestone") or epic.get("milestone"))
         eff, rev = float(s["agent_hours"]), float(s.get("review_hours", 0))
-        issue = create(s, render_story(s, h, deps), [t.lower()] + as_list(s.get("labels")), t, ms, {
+        labels = [t.lower()] + as_list(s.get("labels"))
+        if s.get("owner") == "human" and "needs-human" not in labels:
+            labels.append("needs-human")
+        issue = create(s, render_story(s, h, deps), labels, t, ms, {
             F_PRIO: s.get("priority", "Should"), F_SIZE: s.get("size") or size_for(eff + rev),
-            F_EFFORT: eff, F_REVIEW: rev, F_AGENT: s.get("agent")}, "backlog" if deps else "ready")
+            F_EFFORT: eff, F_REVIEW: rev, F_AGENT: None if s.get("owner") == "human" else s.get("agent")},
+            "backlog" if deps else "ready")
         parent = ref_number(s.get("epic"), issues) if s.get("epic") else None
         if parent:
             if rest("POST", f"repos/{repo}/issues/{parent}/sub_issues", {"sub_issue_id": issue["id"]},
@@ -989,9 +1084,12 @@ def compute_schedule(items, capacity, start=None):
         for d in ds:
             rdeps[d].append(n)
 
+    by_milestone = capacity.get("order", "milestone") == "milestone"
+
     def key(n):
         i = pending[n]
-        return (0 if i["status"] in ("in progress", "in review") else 1, PRIO_RANK.get(i.get(F_PRIO), 1), n)
+        ms = (i.get("milestone") or math.inf) if by_milestone else 0
+        return (0 if i["status"] in ("in progress", "in review") else 1, ms, PRIO_RANK.get(i.get(F_PRIO), 1), n)
 
     indeg = {n: len(ds) for n, ds in deps.items()}
     heap = [(key(n), n) for n, d in indeg.items() if d == 0]
@@ -1007,13 +1105,21 @@ def compute_schedule(items, capacity, start=None):
     cyclic = [n for n in pending if n not in order]
     order += sorted(cyclic, key=key)
 
-    cursor, ends, plan = [0.0] * lanes, {}, {}
+    # Agents share `lanes`; the human works on a lane of their own. Waiting time (store review,
+    # account approval) is calendar time after the work, on nobody's lane.
+    cursor, human_cursor, ends, plan = [0.0] * lanes, 0.0, {}, {}
     for n in order:
+        it = pending[n]
         earliest = max([ends.get(d, 0.0) for d in deps[n]] or [0.0])
-        lane = min(range(lanes), key=lambda k: max(cursor[k], earliest))
-        s = max(cursor[lane], earliest)
-        e = s + effort(pending[n])
-        cursor[lane] = ends[n] = e
+        if is_human(it):
+            s = max(human_cursor, earliest)
+            e = human_cursor = s + effort(it)
+        else:
+            lane = min(range(lanes), key=lambda k: max(cursor[k], earliest))
+            s = max(cursor[lane], earliest)
+            e = cursor[lane] = s + effort(it)
+        ends[n] = e + float(it.get("wait_days") or 0) * hpd
+        e = ends[n]
         plan[n] = (add_workdays(base, int(s // hpd), workdays),
                    add_workdays(base, int(max(e - 1e-6, s) // hpd), workdays))
 
@@ -1029,6 +1135,15 @@ def compute_schedule(items, capacity, start=None):
             plan[ep["number"]] = (min(s for s, _ in spans), max(e for _, e in spans))
     missing = [n for n in pending if pending[n].get(F_EFFORT) is None]
     return plan, cyclic, missing
+
+
+def must_dates(plan, by_num):
+    out = {}
+    for n, (_, e) in plan.items():
+        i = by_num[n]
+        if i.get("milestone") and i.get(F_TYPE) != "Epic" and i.get(F_PRIO) == "Must":
+            out[i["milestone"]] = max(out.get(i["milestone"], dt.date.min), e)
+    return out
 
 
 def cmd_schedule(a):
@@ -1062,8 +1177,10 @@ def cmd_schedule(a):
         if i.get("milestone") and i.get(F_TARGET) and i["number"] not in plan:
             ms_end[i["milestone"]] = max(ms_end[i["milestone"]], parse_date(i[F_TARGET]))
     titles = {i["milestone"]: i["milestone_title"] for i in items if i.get("milestone")}
+    must_end = must_dates(plan, by_num)
     for m, e in sorted(ms_end.items(), key=lambda kv: kv[1]):
-        print(f"milestone {titles.get(m)}: {e}")
+        extra = f" (Musts done by {must_end[m]})" if m in must_end and must_end[m] != e else ""
+        print(f"milestone {titles.get(m)}: {e}{extra}")
 
     if a.apply:
         fields = project_fields(ctx["project_id"])
@@ -1085,7 +1202,11 @@ def cmd_schedule(a):
         for n, (s, e) in rows:
             groups[by_num[n].get("milestone_title") or "—"].append((n, s, e))
         for title, entries in sorted(groups.items(), key=lambda kv: min(x[1] for x in kv[1])):
-            lines += [f"## {title}", "", "| # | Type | Priority | Effort (h) | Start | Target | Title |",
+            ms_num = by_num[entries[0][0]].get("milestone")
+            lines += [f"## {title}", ""]
+            if ms_num in must_end:
+                lines += [f"Musts done by **{must_end[ms_num]}** · everything by **{max(x[2] for x in entries)}**", ""]
+            lines += ["| # | Type | Priority | Effort (h) | Start | Target | Title |",
                       "|---|---|---|---|---|---|---|"]
             for n, s, e in entries:
                 i = by_num[n]
@@ -1159,6 +1280,11 @@ def timers():
 def cmd_start(a):
     ctx = gh_ctx()
     _, it = get_item(ctx, a.issue)
+    if it["state"] != "OPEN":
+        die(f"#{a.issue} is closed")
+    if it["status"] in ("in progress", "in review") and not a.force:
+        die(f"#{a.issue} is already {it['status']} — someone (another machine or a cloud run) may be on it. "
+            "Use --force to take it over.", code=3)
     set_item_field(ctx, project_fields(ctx["project_id"]), it["item_id"], F_STATUS, "in progress")
     t = timers()
     t.setdefault(str(a.issue), dt.datetime.now().isoformat(timespec="seconds"))
@@ -1207,9 +1333,59 @@ def cmd_done(a):
             set_item_field(ctx, fields, epic["item_id"], F_STATUS, "in progress")
 
 
+def status_summary(ctx, items):
+    work = [i for i in items if i.get(F_TYPE) != "Epic"]
+    total = sum(effort(i) for i in work)
+    done_n = {i["number"] for i in work if i["state"] == "CLOSED" or i["status"] == "done"}
+    done = [i for i in work if i["number"] in done_n]
+    done_h = sum(effort(i) for i in done)
+    actual = [(effort(i), float(i[F_ACTUAL])) for i in done if i.get(F_ACTUAL) is not None]
+    ms = {}
+    for i in work:
+        if i.get("milestone"):
+            m = ms.setdefault(i["milestone"], {"number": i["milestone"], "title": i["milestone_title"],
+                                               "done": 0, "total": 0, "hours_done": 0.0, "hours_total": 0.0,
+                                               "target": None, "musts_target": None})
+            m["total"] += 1
+            m["hours_total"] += effort(i)
+            if i["number"] in done_n:
+                m["done"] += 1
+                m["hours_done"] += effort(i)
+            elif i.get(F_TARGET):
+                m["target"] = max(m["target"] or "", i[F_TARGET])
+                if i.get(F_PRIO) == "Must":
+                    m["musts_target"] = max(m["musts_target"] or "", i[F_TARGET])
+
+    def brief(i):
+        return {"number": i["number"], "title": i["title"], "url": i["url"], "type": i.get(F_TYPE),
+                "priority": i.get(F_PRIO), "agent": i.get(F_AGENT), "labels": i["labels"],
+                "milestone": i.get("milestone_title")}
+
+    open_targets = [i[F_TARGET] for i in work if i["state"] == "OPEN" and i.get(F_TARGET)]
+    return {
+        "contract_version": CONTRACT_VERSION, "framework_version": framework_version(),
+        "project_url": ctx["project_url"], "repo": ctx["repo"],
+        "counts": {k: sum(1 for i in work if ("done" if i["number"] in done_n else i["status"]) == k)
+                   for k in ("backlog", "ready", "in progress", "in review", "done")},
+        "hours": {"done": done_h, "total": total, "remaining": total - done_h},
+        "accuracy": ({"estimated": sum(x for x, _ in actual), "actual": sum(y for _, y in actual),
+                      "items": len(actual)} if actual else None),
+        "projected_end": max(open_targets) if open_targets else None,
+        "milestones": sorted(ms.values(), key=lambda m: m["number"]),
+        "in_progress": [brief(i) for i in work if i["status"] == "in progress" and i["number"] not in done_n],
+        "in_review": [brief(i) for i in work if i["status"] == "in review" and i["number"] not in done_n],
+        "needs_attention": [brief(i) for i in work if i["state"] == "OPEN"
+                            and {"needs-human", "blocked"} & set(i["labels"])],
+        "ready": [brief(i) for i in ready_items(items)],
+    }
+
+
 def cmd_status(a):
     ctx = gh_ctx()
     items = load_items(ctx)
+    if a.json:
+        print(json.dumps(status_summary(ctx, items), indent=2, ensure_ascii=False))
+        return
     work = [i for i in items if i.get(F_TYPE) != "Epic"]
     by = defaultdict(list)
     for i in work:
@@ -1240,6 +1416,31 @@ def cmd_status(a):
     for i in work:
         if i["state"] == "OPEN" and {"needs-human", "blocked"} & set(i["labels"]):
             print(f"Needs attention: #{i['number']} {i['title']} ({', '.join(i['labels'])})")
+
+
+def schema():
+    return {
+        "contract_version": CONTRACT_VERSION,
+        "framework_version": framework_version(),
+        "fields": {"status": F_STATUS, "item_type": F_TYPE, "priority": F_PRIO, "size": F_SIZE,
+                   "agent_effort": F_EFFORT, "human_review": F_REVIEW, "actual": F_ACTUAL,
+                   "start_date": F_START, "target_date": F_TARGET, "agent": F_AGENT},
+        "field_types": {n: t for n, t, _ in PROJECT_FIELDS},
+        "field_options": {n: [o for o, _ in opts] for n, _, opts in PROJECT_FIELDS if opts},
+        "statuses": [n for n, _, _ in STATUS_OPTIONS],
+        "status_aliases": STATUS_ALIASES,
+        "priorities": PRIORITIES,
+        "work_types": WORK_TYPES,
+        "sizes": {n: (None if h == math.inf else h) for n, h in SIZES},
+        "labels": [n for n, _, _ in LABELS],
+        "markers": {"key": "<!-- fw:key KEY -->", "depends_on": "<!-- fw:depends-on 12,34 -->",
+                    "owner": "<!-- fw:owner human -->", "wait_days": "<!-- fw:wait-days N -->"},
+        "json_commands": ["doctor --json", "next --json", "status --json", "schema --json"],
+    }
+
+
+def cmd_schema(a):
+    print(json.dumps(schema(), indent=2, ensure_ascii=False))
 
 
 # --------------------------------------------------------------------------- agents & docs quality
@@ -1479,6 +1680,11 @@ def main():
     s.add_argument("--title", help="project title (default: repo name)")
     s.add_argument("--template", help="copy an existing project owner/number (keeps its views)")
     s.add_argument("--new-project", action="store_true", help="ignore the configured project and create one")
+    s.add_argument("--project", type=int, help="reuse this existing project number of the owner")
+    s.add_argument("--restore-status", action="store_true",
+                   help="only re-apply the statuses saved in .fw/local/status-backup.json")
+    s.add_argument("--fix-status", action="store_true",
+                   help="(re)apply the Backlog/Ready/In progress/In review/Done columns, keeping item statuses")
     s.set_defaults(fn=cmd_github_setup)
 
     s = sub.add_parser("views-check", help="verify the Board and Roadmap views exist")
@@ -1507,11 +1713,14 @@ def main():
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_next)
 
-    for name, fn, hlp in (("start", cmd_start, "→ In progress, start the timer"),
-                          ("review", cmd_review, "→ In review")):
-        s = sub.add_parser(name, help=hlp)
-        s.add_argument("issue", type=int)
-        s.set_defaults(fn=fn)
+    s = sub.add_parser("start", help="→ In progress, start the timer (refuses an item already in progress)")
+    s.add_argument("issue", type=int)
+    s.add_argument("--force", action="store_true", help="take over an item already in progress / in review")
+    s.set_defaults(fn=cmd_start)
+
+    s = sub.add_parser("review", help="→ In review")
+    s.add_argument("issue", type=int)
+    s.set_defaults(fn=cmd_review)
 
     s = sub.add_parser("done", help="→ Done: close, record actual hours, unblock dependents, close epic")
     s.add_argument("issue", type=int)
@@ -1530,7 +1739,12 @@ def main():
     s.set_defaults(fn=cmd_set_field)
 
     s = sub.add_parser("status", help="progress summary")
+    s.add_argument("--json", action="store_true", help="machine-readable summary (see `fw schema`)")
     s.set_defaults(fn=cmd_status)
+
+    s = sub.add_parser("schema", help="machine-readable contract: field names, statuses, markers, versions")
+    s.add_argument("--json", action="store_true", help="(default) JSON output")
+    s.set_defaults(fn=cmd_schema)
 
     s = sub.add_parser("lint-agents", help="check .claude/agents/*.md against the agent quality standard")
     s.set_defaults(fn=cmd_lint_agents)
