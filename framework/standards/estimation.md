@@ -48,7 +48,7 @@ backlog file before applying, or with `fw set-field <n> "Agent effort (h)" <h>` 
 - Each agent item occupies `agent_hours + review_hours` on the first free lane, never before
   its dependencies end. **Human items** (`owner: human` / `needs-human`) run on a separate
   human lane and don't consume agent capacity. `wait_days` is added after the work as
-  calendar time before dependents can start.
+  waiting time (in workdays) before dependents can start.
 - The report gives, per milestone, the date its **Musts** are done and the date everything is
   done. Hours are converted to workdays; epics span their children; milestone due
   dates are the latest target date of their items.

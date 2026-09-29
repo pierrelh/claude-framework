@@ -10,7 +10,8 @@ and the upstream one. "Contract" = the machine-readable interface (`fw schema`, 
 - `fw status --json`: counts, hours, accuracy, milestones (with Musts target), in progress,
   in review, needs attention, ready items.
 - `fw github-setup --project <n>` to attach an existing project; `--fix-status` to replace
-  the default Todo/In Progress/Done columns while keeping every item's status.
+  the default Todo/In Progress/Done columns while keeping every item's status (backed up to
+  `.fw/local/status-backup.json`; `--restore-status` re-applies it).
 - Backlog items: `owner: human` (no agent, may have 0 agent hours, `needs-human` label) and
   `wait_days` (calendar waiting that delays dependents).
 - `fw backlog-validate` warns when an item depends on a later milestone.

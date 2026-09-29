@@ -39,8 +39,12 @@ class Schedule(unittest.TestCase):
         self.assertLess(p[2][0], p[1][0])
 
     def test_human_items_do_not_take_agent_capacity(self):
-        p = self.plan([item(1, labels=["needs-human"], h=6), item(2, h=6)])
+        p = self.plan([item(1, body="<!-- fw:owner human -->", h=6), item(2, h=6)])
         self.assertEqual(p[1][0], p[2][0])
+
+    def test_needs_human_label_alone_keeps_agent_lane(self):
+        p = self.plan([item(1, labels=["needs-human"], h=6), item(2, h=6)])
+        self.assertLess(p[1][0], p[2][0])
 
     def test_wait_days_delay_dependents(self):
         p = self.plan([item(1, h=6, body="<!-- fw:wait-days 5 -->"), item(2, h=6, deps=[1])])
@@ -81,6 +85,7 @@ class Contract(unittest.TestCase):
     def test_markers_parse(self):
         self.assertEqual(fw.parse_wait("x <!-- fw:wait-days 2.5 --> y"), 2.5)
         self.assertTrue(fw.is_human({"body": "<!-- fw:owner human -->", "labels": []}))
+        self.assertEqual(fw.parse_wait("<!-- fw:wait-days 1.2.3 -->"), 0.0)
         self.assertFalse(fw.is_human({"body": "", "labels": ["story"]}))
 
 

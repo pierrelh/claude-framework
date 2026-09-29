@@ -124,7 +124,7 @@ HEADINGS = {
     },
 }
 DEPS_RE = re.compile(r"<!--\s*fw:depends-on\s+([#\d,\s]+?)\s*-->")
-WAIT_RE = re.compile(r"<!--\s*fw:wait-days\s+([\d.]+)\s*-->")
+WAIT_RE = re.compile(r"<!--\s*fw:wait-days\s+(\d+(?:\.\d+)?)\s*-->")
 OWNER_RE = re.compile(r"<!--\s*fw:owner\s+(\w+)\s*-->")
 # Version of the machine-readable contract (`fw schema`, `--json` outputs). Bump on breaking change.
 CONTRACT_VERSION = 1
@@ -252,9 +252,10 @@ def parse_wait(body):
 
 
 def is_human(item):
-    """Human-owned work: done by the user, not an agent (label or backlog `owner: human`)."""
+    """Human-owned work (backlog `owner: human` → `fw:owner human` marker). The `needs-human` label alone
+    is not enough: it also flags agent work paused on a decision, which keeps its agent effort."""
     m = OWNER_RE.search(item.get("body") or "")
-    return (m and m.group(1) == "human") or "needs-human" in (item.get("labels") or [])
+    return bool(m and m.group(1) == "human")
 
 
 def framework_version():
@@ -538,6 +539,10 @@ def owner_node(login):
 
 
 def cmd_github_setup(a):
+    if a.restore_status:
+        before = load_json(LOCAL / "status-backup.json", None) or die("no .fw/local/status-backup.json")
+        restore_statuses(gh_ctx(), before)
+        return
     c = cfg()
     g = c.setdefault("github", {})
     login = gh("api", "user", "--jq", ".login").stdout.strip()
@@ -562,7 +567,7 @@ def cmd_github_setup(a):
     title = a.title or r["name"]
     created = False
     if a.project:
-        _, o_type = owner_node(owner)
+        o_type = owner_type
         proj = graphql("query($l:String!,$n:Int!){ %s(login:$l){ projectV2(number:$n){ id number url } } }" % o_type,
                        l=owner, n=int(a.project))[o_type]["projectV2"] or die(f"project {owner}/{a.project} not found")
         pid, number, url = proj["id"], proj["number"], proj["url"]
@@ -612,6 +617,11 @@ def cmd_github_setup(a):
     if created or a.fix_status or current == DEFAULT_STATUS_NAMES:
         # Replacing the options drops every item's Status value: remember them and restore after.
         before = [] if created else load_items({"project_id": pid, "repo": repo})
+        if before:
+            backup = LOCAL / "status-backup.json"
+            save_json(backup, before)
+            print(f"✔ statuses backed up to {backup.relative_to(ROOT)} "
+                  "(if the restore fails: `fw github-setup --restore-status`)")
         wanted = [{"name": n, "color": col, "description": d} for n, col, d in STATUS_OPTIONS]
         ok = graphql("""mutation($f:ID!,$o:[ProjectV2SingleSelectFieldOptionInput!]){
             updateProjectV2Field(input:{fieldId:$f,singleSelectOptions:$o}){
@@ -1671,6 +1681,8 @@ def main():
     s.add_argument("--template", help="copy an existing project owner/number (keeps its views)")
     s.add_argument("--new-project", action="store_true", help="ignore the configured project and create one")
     s.add_argument("--project", type=int, help="reuse this existing project number of the owner")
+    s.add_argument("--restore-status", action="store_true",
+                   help="only re-apply the statuses saved in .fw/local/status-backup.json")
     s.add_argument("--fix-status", action="store_true",
                    help="(re)apply the Backlog/Ready/In progress/In review/Done columns, keeping item statuses")
     s.set_defaults(fn=cmd_github_setup)
