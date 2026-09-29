@@ -1,0 +1,70 @@
+# Runs a framework command (/fw-work, /fw-backlog, /fw-status) in GitHub Actions, with Claude Code.
+# Installed by `framework/bin/fw workflow install cloud-run` into .github/workflows/fw-cloud-run.yml.
+# Secrets (Settings → Secrets and variables → Actions):
+#   ANTHROPIC_API_KEY — your Anthropic API key (pay per use).
+#   FW_GH_TOKEN       — a classic personal access token with the repo, project and workflow scopes:
+#                       GITHUB_TOKEN cannot read or edit Projects v2 owned by a personal account.
+# Questions asked by agents end the job with an issue comment (`fw escalate`). Answer with a
+# comment starting with `/answer`, or dispatch this workflow with answer_issue + answer.
+# Docs: docs/framework/cloud-runs.md. Check action versions are current when installing.
+name: fw cloud run
+
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        description: Framework command
+        type: choice
+        options: [fw-work, fw-backlog, fw-status]
+        default: fw-work
+        required: true
+      args:
+        description: 'Arguments: "#12", "all", "3", or the need for fw-backlog'
+        type: string
+        required: false
+      answer_issue:
+        description: Issue whose pending question this run answers (optional)
+        type: string
+        required: false
+      answer:
+        description: The answer (optional, with answer_issue)
+        type: string
+        required: false
+
+concurrency:
+  group: fw-cloud-run-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      FW_HEADLESS: "1"
+      GH_TOKEN: ${{ secrets.FW_GH_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FW_GH_TOKEN }}
+
+      - name: Record the answer to a pending question
+        if: ${{ inputs.answer_issue != '' && inputs.answer != '' }}
+        env:
+          ISSUE: ${{ inputs.answer_issue }}
+          ANSWER: ${{ inputs.answer }}
+        run: |
+          case "$ISSUE" in ''|*[!0-9]*) echo "answer_issue must be a number" >&2; exit 1;; esac
+          framework/bin/fw answer "$ISSUE" "$ANSWER"
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.FW_GH_TOKEN }}
+          prompt: /${{ inputs.command }} ${{ inputs.args }}
+          claude_args: --permission-mode bypassPermissions --max-turns 300

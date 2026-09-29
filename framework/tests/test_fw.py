@@ -89,5 +89,31 @@ class Contract(unittest.TestCase):
         self.assertFalse(fw.is_human({"body": "", "labels": ["story"]}))
 
 
+class Escalations(unittest.TestCase):
+    def c(self, body, user="alice"):
+        return {"body": body, "user": {"login": user}, "html_url": "u", "created_at": "t"}
+
+    def esc(self, i):
+        return self.c(fw.marker("escalation", {"v": 1, "id": i, "kind": "question", "question": "Q?"}), "bot")
+
+    def test_lifecycle(self):
+        comments = [self.esc("e1"), self.c(fw.marker("answer", {"escalation": "e1", "text": "A"})),
+                    self.c(fw.marker("resolved", {"escalation": "e1"}))]
+        states = [e["state"] for e in fw.escalation_states(comments[:1])], \
+            [e["state"] for e in fw.escalation_states(comments[:2])], \
+            [e["state"] for e in fw.escalation_states(comments)]
+        self.assertEqual(states, (["open"], ["answered"], ["resolved"]))
+
+    def test_plain_answer_comment_answers_latest_open(self):
+        es = fw.escalation_states([self.esc("e1"), self.esc("e2"), self.c("/answer go with 2")])
+        self.assertEqual([(e["id"], e["state"]) for e in es], [("e1", "open"), ("e2", "answered")])
+        self.assertEqual(es[1]["answer"], "go with 2")
+        self.assertEqual(es[1]["answered_by"], "alice")
+
+    def test_unrelated_comments_and_bad_json_are_ignored(self):
+        es = fw.escalation_states([self.c("hello"), self.c("<!-- fw:escalation {not json} -->")])
+        self.assertEqual(es, [])
+
+
 if __name__ == "__main__":
     unittest.main()

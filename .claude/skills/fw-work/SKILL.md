@@ -23,14 +23,18 @@ has no agent, do that step yourself, briefly.
 
 ## Loop — for each item
 0. **Preconditions**: clean working tree; `git checkout <default> && git pull`.
-1. **Pick**: `framework/bin/fw next` (or the requested issue). Assisted mode: show the top
+   Headless session (`FW_HEADLESS=1` or `CI=true`): you cannot ask anyone — every question
+   goes through `fw escalate` (see *Escalation*).
+1. **Pick**: first resume answered questions — `framework/bin/fw escalations --json`, items in
+   state `answered` go first (use the answer, then `fw resolve <n>` once applied). Otherwise
+   `framework/bin/fw next` (or the requested issue). Assisted mode: show the top
    candidates and confirm. Auto mode: take the first.
 2. **Start**: `framework/bin/fw start <n>` — exit code 3 means the item is already in progress
    elsewhere (another machine or a cloud run): skip it and pick the next one, never `--force`
    without the user. Then `git checkout -b feat/<n>-<slug>` (`fix/` for bugs,
    `chore/` for tasks). Read the issue: `gh issue view <n> --comments`.
 3. **Spec check** (spec agent): are the acceptance criteria clear and still valid against
-   the code? `SPEC: NEEDS_INPUT` → assisted: ask the user; auto: if the product owner can
+   the code? `SPEC: NEEDS_INPUT` → assisted: escalate as a `question` and ask the user; auto: if the product owner can
    decide with a reasonable, reversible assumption, it posts the assumption as an issue
    comment and continues; otherwise escalate (see below).
 4. **Implement** (the agent in the issue's *Agent* field, else the first implementer):
@@ -51,8 +55,9 @@ has no agent, do that step yourself, briefly.
 9. **CI**: if the repo has workflows, `gh pr checks <pr> --watch` (fail → back to step 4).
 10. **Merge**:
     - auto: when every reviewer APPROVE + QA PASS + CI green → `gh pr merge <pr> --squash --delete-branch`.
-    - assisted: give the PR link and a 3-line summary; merge only when the user says so
-      (or they merge on GitHub).
+    - assisted: give the PR link and a 3-line summary; ask with the prefix
+      `[fw:approval merge #<n> pr #<pr>]` and merge only when the user says so (or they merge
+      on GitHub). Headless: `fw escalate <n> --kind approval --pr <pr> …` and move on.
 11. **Close the loop**: `git checkout <default> && git pull`; `framework/bin/fw done <n>`
     (records actual hours, unblocks dependents, closes the epic when complete);
     `framework/bin/fw schedule --apply --markdown docs/product/roadmap.md` (the snapshot is
@@ -60,9 +65,13 @@ has no agent, do that step yourself, briefly.
 12. **Continue?** auto + `all`/N: next item. Assisted: ask.
 
 ## Escalation — stop the item, never guess
-Add the `needs-human` label and a comment explaining exactly what is needed, set the item
-back to Ready (`fw set-status <n> ready`), switch back to the default branch (keep the
-feature branch), and move to the next item. Escalate when:
+Follow `framework/standards/escalation.md`: `framework/bin/fw escalate <n> --kind
+question|approval|blocked --question "…" --option "…" --recommended 0` (it posts a structured
+comment and adds `needs-human`). Interactive session: then ask the user with AskUserQuestion,
+question text prefixed `[fw:<kind> <id>]`, and `fw resolve <n> --answer "…"` — continue the
+item with the answer. Headless session, or no answer possible now: set the item back to Ready
+(`fw set-status <n> ready`), switch back to the default branch (keep the feature branch, push
+it), and move to the next item. Escalate when:
 - a business rule is ambiguous and a wrong guess is costly or irreversible;
 - credentials, secrets, paid services or production access are needed;
 - the change would delete or migrate existing data, touch payments/auth in a way the

@@ -126,6 +126,8 @@ HEADINGS = {
 DEPS_RE = re.compile(r"<!--\s*fw:depends-on\s+([#\d,\s]+?)\s*-->")
 WAIT_RE = re.compile(r"<!--\s*fw:wait-days\s+(\d+(?:\.\d+)?)\s*-->")
 OWNER_RE = re.compile(r"<!--\s*fw:owner\s+(\w+)\s*-->")
+ESC_RE = re.compile(r"<!--\s*fw:(escalation|answer|resolved)\s+(\{.*?\})\s*-->", re.S)
+ESC_KINDS = ("question", "approval", "blocked")
 # Version of the machine-readable contract (`fw schema`, `--json` outputs). Bump on breaking change.
 CONTRACT_VERSION = 1
 DEFAULT_STATUS_NAMES = {"todo", "in progress", "done"}
@@ -1435,12 +1437,171 @@ def schema():
         "labels": [n for n, _, _ in LABELS],
         "markers": {"key": "<!-- fw:key KEY -->", "depends_on": "<!-- fw:depends-on 12,34 -->",
                     "owner": "<!-- fw:owner human -->", "wait_days": "<!-- fw:wait-days N -->"},
-        "json_commands": ["doctor --json", "next --json", "status --json", "schema --json"],
+        "json_commands": ["doctor --json", "next --json", "status --json", "schema --json", "escalations --json",
+                          "escalate", "answer", "resolve"],
+        "escalation": {"kinds": list(ESC_KINDS), "states": ["open", "answered", "resolved"],
+                       "comment_markers": {"escalation": "<!-- fw:escalation {json} -->",
+                                           "answer": "<!-- fw:answer {\"escalation\": id} --> or a comment starting with /answer",
+                                           "resolved": "<!-- fw:resolved {\"escalation\": id} -->"},
+                       "ask_prefix": "[fw:<kind> <id>]"},
     }
 
 
 def cmd_schema(a):
     print(json.dumps(schema(), indent=2, ensure_ascii=False))
+
+
+# --------------------------------------------------------------------------- escalations
+
+def escalation_states(comments):
+    """Fold an issue's comments into escalations: open → answered → resolved (see standards/escalation.md)."""
+    escs, order = {}, []
+    for c in comments:
+        body = c.get("body") or ""
+        found = False
+        for kind, raw in ESC_RE.findall(body):
+            try:
+                data = json.loads(raw)
+            except ValueError:
+                continue
+            found = True
+            if kind == "escalation" and data.get("id"):
+                data.update(state="open", answer=None, answered_by=None, comment_url=c.get("html_url"),
+                            created_at=c.get("created_at"))
+                escs[data["id"]] = data
+                order.append(data["id"])
+            elif kind == "answer" and data.get("escalation") in escs:
+                e = escs[data["escalation"]]
+                if e["state"] == "open":
+                    e.update(state="answered", answer=data.get("text"), answered_by=(c.get("user") or {}).get("login"))
+            elif kind == "resolved" and data.get("escalation") in escs:
+                escs[data["escalation"]]["state"] = "resolved"
+        if not found and body.lstrip().startswith("/answer"):
+            pending = [i for i in reversed(order) if escs[i]["state"] == "open"]
+            if pending:  # a plain `/answer <text>` comment answers the latest open escalation
+                escs[pending[0]].update(state="answered", answer=body.lstrip()[len("/answer"):].strip(),
+                                        answered_by=(c.get("user") or {}).get("login"))
+    return [escs[i] for i in order]
+
+
+def issue_comments(repo, number):
+    out, page = [], 1
+    while True:
+        batch = rest("GET", f"repos/{repo}/issues/{number}/comments?per_page=100&page={page}") or []
+        out += batch
+        if len(batch) < 100:
+            return out
+        page += 1
+
+
+def marker(kind, data):
+    return f"<!-- fw:{kind} {json.dumps(data, ensure_ascii=False)} -->"
+
+
+def set_needs_human(repo, number, on):
+    if on:
+        rest("POST", f"repos/{repo}/issues/{number}/labels", {"labels": ["needs-human"]}, check=False)
+    else:
+        rest("DELETE", f"repos/{repo}/issues/{number}/labels/needs-human", check=False)
+
+
+def cmd_escalate(a):
+    ctx = gh_ctx()
+    esc = {"v": 1, "id": f"esc-{a.issue}-{dt.datetime.now().strftime('%Y%m%d%H%M%S')}", "kind": a.kind,
+           "issue": a.issue, "question": a.question, "options": a.option or [], "recommended": a.recommended,
+           "multi": a.multi, "pr": a.pr, "source": a.source}
+    lines = [marker("escalation", esc), f"**🙋 Needs you — {a.kind}**" + (f" (PR #{a.pr})" if a.pr else ""), "",
+             a.question, ""]
+    if a.context:
+        lines += [a.context, ""]
+    for n, o in enumerate(esc["options"]):
+        lines.append(f"{n + 1}. {o}" + (" *(recommended)*" if a.recommended == n else ""))
+    lines += ["", "_Answer with a comment starting with `/answer`, e.g. `/answer "
+              + (esc["options"][a.recommended or 0] if esc["options"] else "yes") + "`._"]
+    c = rest("POST", f"repos/{ctx['repo']}/issues/{a.issue}/comments", {"body": "\n".join(lines)})
+    set_needs_human(ctx["repo"], a.issue, True)
+    esc["comment_url"] = c["html_url"]
+    print(json.dumps(esc, indent=2, ensure_ascii=False))
+
+
+def find_escalation(ctx, issue, esc_id, states):
+    escs = [e for e in escalation_states(issue_comments(ctx["repo"], issue)) if e["state"] in states]
+    if esc_id:
+        escs = [e for e in escs if e["id"] == esc_id]
+    return escs[-1] if escs else die(f"#{issue}: no {'/'.join(states)} escalation" + (f" {esc_id}" if esc_id else ""))
+
+
+def cmd_answer(a):
+    ctx = gh_ctx()
+    e = find_escalation(ctx, a.issue, a.id, ("open",))
+    rest("POST", f"repos/{ctx['repo']}/issues/{a.issue}/comments",
+         {"body": marker("answer", {"v": 1, "escalation": e["id"], "text": a.text}) + f"\n**Answer:** {a.text}"})
+    print(json.dumps({"escalation": e["id"], "issue": a.issue, "state": "answered", "answer": a.text}))
+
+
+def cmd_resolve(a):
+    ctx = gh_ctx()
+    e = find_escalation(ctx, a.issue, a.id, ("open", "answered"))
+    body = marker("resolved", {"v": 1, "escalation": e["id"]})
+    if a.answer:
+        body = marker("answer", {"v": 1, "escalation": e["id"], "text": a.answer}) + "\n" + body + \
+            f"\n**Answer:** {a.answer}"
+    rest("POST", f"repos/{ctx['repo']}/issues/{a.issue}/comments", {"body": body})
+    still_open = [x for x in escalation_states(issue_comments(ctx["repo"], a.issue)) if x["state"] != "resolved"]
+    if not still_open:
+        set_needs_human(ctx["repo"], a.issue, False)
+    print(json.dumps({"escalation": e["id"], "issue": a.issue, "state": "resolved",
+                      "answer": a.answer or e.get("answer")}))
+
+
+def cmd_escalations(a):
+    ctx = gh_ctx()
+    if a.issue:
+        numbers = [a.issue]
+    else:
+        numbers = [i["number"] for i in rest("GET", f"repos/{ctx['repo']}/issues?labels=needs-human&state=open&per_page=100")
+                   if "pull_request" not in i]
+    states = {"open", "answered"} if not a.all else {"open", "answered", "resolved"}
+    out = [e for n in numbers for e in escalation_states(issue_comments(ctx["repo"], n)) if e["state"] in states]
+    if a.json:
+        print(json.dumps(out, indent=2, ensure_ascii=False))
+        return
+    if not out:
+        print("No pending escalation.")
+    for e in out:
+        print(f"#{e['issue']:<5} {e['state']:<9} {e['kind']:<9} {e['question'][:70]}"
+              + (f"  → {e['answer'][:40]}" if e.get("answer") else ""))
+
+
+# --------------------------------------------------------------------------- workflows
+
+def cmd_workflow(a):
+    src_dir = ROOT / "framework" / "templates" / "workflows"
+    available = sorted(p.stem.replace("fw-", "") for p in src_dir.glob("*.yml"))
+    if a.action == "list" or not a.name:
+        print("available workflows: " + ", ".join(available))
+        return
+    src = src_dir / (f"fw-{a.name}.yml" if (src_dir / f"fw-{a.name}.yml").exists() else f"{a.name}.yml")
+    if not src.exists():
+        die(f"unknown workflow '{a.name}' (available: {', '.join(available)})")
+    dst = ROOT / ".github" / "workflows" / src.name
+    if dst.exists() and not a.force:
+        die(f"{dst.relative_to(ROOT)} exists — use --force to overwrite")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(src, dst)
+    print(f"✔ installed {dst.relative_to(ROOT)}")
+    needed = re.findall(r"secrets\.([A-Z0-9_]+)", src.read_text())
+    needed = sorted(set(needed) - {"GITHUB_TOKEN"})
+    if needed:
+        repo = dig(cfg(), "github.repo")
+        have = set()
+        if repo:
+            r = gh("secret", "list", "-R", repo, "--json", "name", check=False)
+            if r.returncode == 0:
+                have = {x["name"] for x in json.loads(r.stdout or "[]")}
+        for n in needed:
+            print(f"  {'✔' if n in have else '✘'} secret {n}" + ("" if n in have else f" — gh secret set {n} -R {repo}"))
+    print("  commit it through a pull request (see docs/framework/cloud-runs.md for cloud-run).")
 
 
 # --------------------------------------------------------------------------- agents & docs quality
@@ -1745,6 +1906,42 @@ def main():
     s = sub.add_parser("schema", help="machine-readable contract: field names, statuses, markers, versions")
     s.add_argument("--json", action="store_true", help="(default) JSON output")
     s.set_defaults(fn=cmd_schema)
+
+    s = sub.add_parser("escalate", help="post a structured question on an issue and label it needs-human")
+    s.add_argument("issue", type=int)
+    s.add_argument("--kind", choices=ESC_KINDS, default="question")
+    s.add_argument("--question", required=True)
+    s.add_argument("--option", action="append", help="repeat for each option, recommended first")
+    s.add_argument("--recommended", type=int, help="index of the recommended option (0-based)")
+    s.add_argument("--multi", action="store_true", help="several options may be chosen")
+    s.add_argument("--pr", type=int, help="pull request the question is about")
+    s.add_argument("--context", help="extra explanation shown under the question")
+    s.add_argument("--source", default="fw-work", help="command that escalated (default fw-work)")
+    s.set_defaults(fn=cmd_escalate)
+
+    s = sub.add_parser("answer", help="answer the latest open escalation of an issue")
+    s.add_argument("issue", type=int)
+    s.add_argument("text")
+    s.add_argument("--id", help="escalation id (default: the latest open one)")
+    s.set_defaults(fn=cmd_answer)
+
+    s = sub.add_parser("resolve", help="mark an escalation resolved (removes needs-human when none is left)")
+    s.add_argument("issue", type=int)
+    s.add_argument("--id", help="escalation id (default: the latest open or answered one)")
+    s.add_argument("--answer", help="record this answer at the same time")
+    s.set_defaults(fn=cmd_resolve)
+
+    s = sub.add_parser("escalations", help="list open / answered escalations (all needs-human issues or one)")
+    s.add_argument("--issue", type=int)
+    s.add_argument("--all", action="store_true", help="include resolved ones")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_escalations)
+
+    s = sub.add_parser("workflow", help="install a GitHub Actions workflow from framework/templates/workflows")
+    s.add_argument("action", choices=["list", "install"])
+    s.add_argument("name", nargs="?", help="e.g. cloud-run, docs")
+    s.add_argument("--force", action="store_true")
+    s.set_defaults(fn=cmd_workflow)
 
     s = sub.add_parser("lint-agents", help="check .claude/agents/*.md against the agent quality standard")
     s.set_defaults(fn=cmd_lint_agents)
