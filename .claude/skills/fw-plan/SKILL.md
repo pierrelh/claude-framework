@@ -31,6 +31,7 @@ Save with `framework/bin/fw config set capacity.hours_per_day 8` etc.
 framework/bin/fw schedule                       # preview
 framework/bin/fw schedule --apply --markdown docs/product/roadmap.md
 ```
-Report in the user's language: projected end per milestone, the critical path (longest
+Report in the user's language: projected end per milestone (the date its Musts are done and
+the date everything is done), the human tasks and waiting times on the path, the critical path (longest
 dependency chain), what would move the date the most (capacity, a big story, a dependency).
 Remind them the Roadmap view on GitHub now shows the plan.

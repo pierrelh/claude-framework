@@ -25,7 +25,9 @@ has no agent, do that step yourself, briefly.
 0. **Preconditions**: clean working tree; `git checkout <default> && git pull`.
 1. **Pick**: `framework/bin/fw next` (or the requested issue). Assisted mode: show the top
    candidates and confirm. Auto mode: take the first.
-2. **Start**: `framework/bin/fw start <n>`; `git checkout -b feat/<n>-<slug>` (`fix/` for bugs,
+2. **Start**: `framework/bin/fw start <n>` — exit code 3 means the item is already in progress
+   elsewhere (another machine or a cloud run): skip it and pick the next one, never `--force`
+   without the user. Then `git checkout -b feat/<n>-<slug>` (`fix/` for bugs,
    `chore/` for tasks). Read the issue: `gh issue view <n> --comments`.
 3. **Spec check** (spec agent): are the acceptance criteria clear and still valid against
    the code? `SPEC: NEEDS_INPUT` → assisted: ask the user; auto: if the product owner can
@@ -34,8 +36,10 @@ has no agent, do that step yourself, briefly.
 4. **Implement** (the agent in the issue's *Agent* field, else the first implementer):
    tests first where practical, then code, following `CLAUDE.md`. It must run the project's
    test/lint commands. `STATUS: BLOCKED` → escalate.
-5. **Review** (review agent) on `git diff <default>...HEAD`. `CHANGES_REQUESTED` → send the
-   findings back to the implementer; max **3** review rounds, then escalate.
+5. **Review** on `git diff <default>...HEAD` by **every** agent listed in `roles.review` (a
+   string or a list — e.g. a code reviewer and a security reviewer), run in parallel. The
+   step passes only when **all** return `VERDICT: APPROVE`. Any `CHANGES_REQUESTED` → send
+   the merged findings back to the implementer; max **3** review rounds, then escalate.
 6. **QA** (qa agent): verify every acceptance criterion with evidence (test names, command
    output, observed behaviour). `QA: FAIL` → back to step 4 (counts as a review round).
 7. **Docs** (docs agent): update `docs/` and `CLAUDE.md` if behaviour, commands,
@@ -46,7 +50,7 @@ has no agent, do that step yourself, briefly.
    `framework/bin/fw review <n>`.
 9. **CI**: if the repo has workflows, `gh pr checks <pr> --watch` (fail → back to step 4).
 10. **Merge**:
-    - auto: when review APPROVE + QA PASS + CI green → `gh pr merge <pr> --squash --delete-branch`.
+    - auto: when every reviewer APPROVE + QA PASS + CI green → `gh pr merge <pr> --squash --delete-branch`.
     - assisted: give the PR link and a 3-line summary; merge only when the user says so
       (or they merge on GitHub).
 11. **Close the loop**: `git checkout <default> && git pull`; `framework/bin/fw done <n>`

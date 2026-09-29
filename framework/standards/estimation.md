@@ -40,11 +40,17 @@ backlog file before applying, or with `fw set-field <n> "Agent effort (h)" <h>` 
 ## Scheduling model (`fw schedule`)
 - Capacity from `.fw/config.json → capacity`: `hours_per_day` (default 6 — the hours per day
   the user actually lets agents run), `parallel_lanes` (default 1 — stories worked on at the
-  same time), `workdays` (ISO numbers, default Mon–Fri), optional `start_date`.
-- Items are ordered by dependencies, then in-progress first, then priority (Must → Could),
-  then issue number. `Won't` items are not scheduled.
-- Each item occupies `agent_hours + review_hours` on the first free lane, never before its
-  dependencies end. Hours are converted to workdays; epics span their children; milestone due
+  same time), `workdays` (ISO numbers, default Mon–Fri), optional `start_date`, `order`
+  (`milestone` — default — or `priority`).
+- Items are ordered by dependencies, then in-progress first, then **milestone** (earlier
+  milestones first; `order: priority` skips this), then priority (Must → Could), then issue
+  number. `Won't` items are not scheduled.
+- Each agent item occupies `agent_hours + review_hours` on the first free lane, never before
+  its dependencies end. **Human items** (`owner: human` / `needs-human`) run on a separate
+  human lane and don't consume agent capacity. `wait_days` is added after the work as
+  calendar time before dependents can start.
+- The report gives, per milestone, the date its **Musts** are done and the date everything is
+  done. Hours are converted to workdays; epics span their children; milestone due
   dates are the latest target date of their items.
 - Closed items keep their dates. Re-run `fw schedule --apply` whenever scope, estimates or
   capacity change — `/fw-work` does it after every merged story.
