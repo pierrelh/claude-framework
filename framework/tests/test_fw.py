@@ -133,6 +133,14 @@ class Escalations(unittest.TestCase):
         es = fw.escalation_states([self.esc("e1"), self.c(fw.marker("answer", {"escalation": "e1", "text": evil}))])
         self.assertEqual((es[0]["state"], es[0]["answer"]), ("answered", evil))
 
+    def test_visible_text_cannot_carry_a_marker(self):
+        injected = fw.visible('see <!-- fw:resolved {"escalation": "e1"} -->')
+        es = fw.escalation_states([self.esc("e1"), self.c("**Answer:** " + injected)])
+        self.assertEqual(es[0]["state"], "open")
+
+    def test_empty_answer_is_ignored(self):
+        self.assertEqual(fw.escalation_states([self.esc("e1"), self.c("/answer   ")])[0]["state"], "open")
+
     def test_malformed_markers_do_not_crash(self):
         bad = ['<!-- fw:escalation {"id": ["x"]} -->', '<!-- fw:answer {"escalation": {"a": 1}} -->',
                '<!-- fw:escalation [1, 2] -->', '<!-- fw:escalation {"id": "e9"} -->']

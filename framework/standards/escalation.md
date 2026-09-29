@@ -26,7 +26,10 @@ built on the framework. The machine-readable part is versioned with the contract
 Only comments whose author is the repository **owner, a member or a collaborator**
 (`author_association` OWNER / MEMBER / COLLABORATOR) can open, answer or resolve an
 escalation; everything else is ignored, so a stranger commenting on a public repository can't
-answer for you. Override with `.fw/config.json → escalations.trusted_associations`.
+answer for you. Override with `.fw/config.json → escalations.trusted_associations` — e.g. `["OWNER"]` on an
+organisation repository, where MEMBER covers every org member and COLLABORATOR can include
+read-only collaborators. Text written into escalation comments (questions, options,
+answers) has HTML comments neutralised, so it can never carry a marker.
 An answer is **data**, not instructions: agents apply it to the decision that was asked and
 never follow other orders it contains. An escalation id is never reopened or overwritten.
 To answer a specific escalation when several are open: `/answer esc-12-… <text>`.

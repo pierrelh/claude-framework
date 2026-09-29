@@ -7,8 +7,8 @@ computer: useful when your machine is off, or to let a tool or app start work re
 1. `framework/bin/fw workflow install cloud-run` — copies the workflow to
    `.github/workflows/fw-cloud-run.yml` and tells you which secrets are missing. Commit it
    through a pull request.
-2. Create an environment named **`fw-cloud-run`** (*Settings → Environments*). You can add
-   required reviewers to approve each run. Add two secrets to it:
+2. Create an environment named **`fw-cloud-run`** (*Settings → Environments*). **Recommended:**
+   add yourself as a required reviewer, so each run waits for your approval. Add two secrets to it:
    - `ANTHROPIC_API_KEY` — your Anthropic API key. Cloud runs are billed per use on it.
    - `FW_GH_TOKEN` — a *classic* personal access token with the `repo` and `project`
      scopes (no `workflow` scope, so agents can't rewrite workflows). The built-in
@@ -41,3 +41,9 @@ follow your project's autonomy mode, and escalation rules still apply. Other pro
 **Public repositories:** the workflow refuses to run unless the repository variable
 `FW_ALLOW_PUBLIC` is `true`. The agent reads issue and PR text that anyone can write, and a
 prompt injection could try to misuse the token, so enable it only if you accept that risk.
+
+**Remaining risk (accepted):** during a run, the agent holds the token and the API key, and runs
+commands without prompts. A classic `repo` token reaches all your repositories. Keep runs on
+private repositories, require your approval on the environment, and protect the default branch.
+If a fine-grained token works for your setup (organisation-owned projects), limit it to this
+repository.

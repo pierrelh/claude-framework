@@ -1493,7 +1493,7 @@ def escalation_states(comments, trusted=TRUSTED_ASSOCIATIONS):
             elif ref in escs and kind == "resolved":
                 escs[ref]["state"] = "resolved"
         m = None if found else ANSWER_RE.match(body.strip())
-        if m:
+        if m and (m.group(2) or "").strip():  # an empty `/answer` is ignored
             target = m.group(1)
             pending = [i for i in reversed(order) if escs[i]["state"] == "open" and (not target or i == target)]
             if pending:  # `/answer <text>` → latest open escalation; `/answer esc-… <text>` → that one
@@ -1514,6 +1514,11 @@ def issue_comments(repo, number):
         if len(batch) < 100:
             return out
         page += 1
+
+
+def visible(text):
+    """User text shown in a comment: neutralise HTML comments so it can never carry a marker."""
+    return str(text or "").replace("<!--", "&lt;!--").replace("-->", "--&gt;")
 
 
 def marker(kind, data):
@@ -1545,13 +1550,13 @@ def cmd_escalate(a):
            "issue": a.issue, "question": a.question, "options": options, "recommended": a.recommended,
            "multi": a.multi, "pr": a.pr, "source": a.source}
     lines = [marker("escalation", esc), f"**🙋 Needs you — {a.kind}**" + (f" (PR #{a.pr})" if a.pr else ""), "",
-             a.question, ""]
+             visible(a.question), ""]
     if a.context:
-        lines += [a.context, ""]
+        lines += [visible(a.context), ""]
     for n, o in enumerate(esc["options"]):
-        lines.append(f"{n + 1}. {o}" + (" *(recommended)*" if a.recommended == n else ""))
+        lines.append(f"{n + 1}. {visible(o)}" + (" *(recommended)*" if a.recommended == n else ""))
     lines += ["", "_Answer with a comment starting with `/answer`, e.g. `/answer "
-              + (options[a.recommended or 0] if options else "yes") + f"` (or `/answer {esc['id']} …`)._"]
+              + (visible(options[a.recommended or 0]) if options else "yes") + f"` (or `/answer {esc['id']} …`)._"]
     c = rest("POST", f"repos/{ctx['repo']}/issues/{a.issue}/comments", {"body": "\n".join(lines)})
     set_needs_human(ctx["repo"], a.issue, True)
     esc["comment_url"] = c["html_url"]
@@ -1569,7 +1574,7 @@ def cmd_answer(a):
     ctx = gh_ctx()
     e = find_escalation(ctx, a.issue, a.id, ("open",))
     rest("POST", f"repos/{ctx['repo']}/issues/{a.issue}/comments",
-         {"body": marker("answer", {"v": 1, "escalation": e["id"], "text": a.text}) + f"\n**Answer:** {a.text}"})
+         {"body": marker("answer", {"v": 1, "escalation": e["id"], "text": a.text}) + f"\n**Answer:** {visible(a.text)}"})
     print(json.dumps({"escalation": e["id"], "issue": a.issue, "state": "answered", "answer": a.text}))
 
 
@@ -1579,7 +1584,7 @@ def cmd_resolve(a):
     body = marker("resolved", {"v": 1, "escalation": e["id"]})
     if a.answer:
         body = marker("answer", {"v": 1, "escalation": e["id"], "text": a.answer}) + "\n" + body + \
-            f"\n**Answer:** {a.answer}"
+            f"\n**Answer:** {visible(a.answer)}"
     rest("POST", f"repos/{ctx['repo']}/issues/{a.issue}/comments", {"body": body})
     after = states_for(ctx, a.issue)
     if all(x["state"] == "resolved" for x in after):
