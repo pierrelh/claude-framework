@@ -62,6 +62,7 @@ framework import to an existing `CLAUDE.md` and never overwrites your files.
 | `/fw-brief` | Write or revise the product brief |
 | `/fw-triage` | Sort incoming issues onto the board (duplicates, needs info, bugs, hotfixes) |
 | `/fw-release` | Changelog, version bump, tag and GitHub release |
+| `/fw-dashboard` | Visual overview: progress, milestones, burn-up, roadmap timeline, metrics |
 | `/fw-stop` · `/fw-resume` | Stop a running `/fw-work` cleanly (checkpoints) · continue it later |
 | `/fw-retro` | Milestone retrospective: calibrate estimates, turn recurring review findings into rules |
 | `/fw-docs` | Re-sync docs with the code, optional GitHub Pages |

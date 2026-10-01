@@ -3,6 +3,23 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.11.0 — 2026-10-01
+### Added
+- `/fw-dashboard` and `fw dashboard [--html [--out F] [--open]] [--json] [--no-custom]`:
+  overall progress bar; milestones with due date, planned date and health (on track / at
+  risk / late / done); epics; flow; hotfixes, items in flight and items needing you; weekly
+  burn-up (scope vs done hours, last 16 weeks) with the pace of the last 4 weeks and the
+  forecast end date; upcoming items as a timeline with a today marker; estimate accuracy
+  by size; review pipeline state. Terminal view with progress bars, or a self-contained
+  HTML page (`.fw/local/dashboard.html`, light/dark, no external resource, all GitHub
+  text escaped). Rendering lives in `framework/bin/fw_dashboard.py`.
+- Project metrics: `dashboard.metrics` = `[{"title", "command", "unit"?, "target"?,
+  "better"?: "higher"|"lower", "timeout"?}]` — each command prints a number or JSON
+  `{"value", "target", "unit", "detail"}`; shown as tiles / lines, checked against the target.
+### Changed
+- The board query also reads each issue's creation and closing dates and each milestone's
+  due date (`created_at`, `closed_at`, `milestone_due` on items).
+
 ## 0.10.0 — 2026-10-01
 ### Added
 - `fw stop [--now] [--remote] [--reason]`: ask a running `/fw-work` to stop cleanly;

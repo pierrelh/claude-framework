@@ -67,7 +67,19 @@ calendar waiting (store review, account approval).
   semantic version, `CHANGELOG.md` and version bump through a PR, tag, GitHub release,
   milestone closed. It always asks you before publishing.
 
-## 6. Machine-readable contract (for tools and apps)
+## 6. Seeing it — `/fw-dashboard`
+`framework/bin/fw dashboard` prints progress bars in the terminal; `--html --open` writes a
+self-contained page (`.fw/local/dashboard.html`, light/dark, no external resource):
+overall progress, milestones with due dates and their health (*on track* — planned before
+the due date; *at risk* — some item planned after it; *late* — a Must planned after it, or
+the due date passed), epics, flow, what is in flight and what needs you, a weekly
+**burn-up** (scope vs done hours) with the pace of the last 4 weeks and the end date it
+forecasts, the upcoming items as a timeline, estimate accuracy, and your own metrics:
+`dashboard.metrics` in `.fw/config.json` lists commands printing a number (coverage, open
+errors, bundle size…), shown as tiles with an optional target. `--json` gives the same data
+to other tools.
+
+## 7. Machine-readable contract (for tools and apps)
 Tools built on the framework read it through a versioned contract instead of parsing text:
 - `fw schema --json` — field names, statuses, priorities, labels, body markers,
   `contract_version` and `framework_version`;
