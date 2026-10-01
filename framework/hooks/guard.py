@@ -6,6 +6,9 @@ heredoc bodies set aside, sudo/env/bash -c/$(…) unwrapped) and each rule looks
 that actually runs, so a commit message or a PR body that merely *mentions* `rm -rf /` is not
 blocked. If the line cannot be parsed, a conservative text match is used instead.
 
+Agent / Task, and `fw start|rework|worktree add`, `gh pr merge`: refused while a stop is pending
+(`fw stop` → .fw/local/stop.json), so a stopped run cannot start new work even if it misses a check.
+
 Edit / Write / MultiEdit / NotebookEdit: once the project is initialized, framework-owned files
 (framework/MANIFEST `owned`) and `.fw/state.json` are read-only — they change through the
 upstream template and /fw-update, or through `fw` itself.
@@ -106,6 +109,32 @@ def check_protected(paths, how):
             raise Blocked(f"{how} {rel}, which is framework-owned (framework/MANIFEST) or written only by `fw`. "
                           "Change it in the upstream template and run /fw-update; project-specific behaviour "
                           "belongs in CLAUDE.md, .claude/agents/ or docs/")
+
+
+def stop_pending():
+    """`fw stop` was requested: nothing new may start until the run has checkpointed and ended."""
+    try:
+        return json.loads((ROOT / ".fw" / "local" / "stop.json").read_text(encoding="utf-8")) or {}
+    except (OSError, ValueError):
+        return None
+
+
+STOP_MSG = ("a stop was requested (`fw stop`): {what} is not allowed until the run has stopped. Finish the "
+            "current step, checkpoint every item in flight (`framework/bin/fw checkpoint <n> --step … --next …`) "
+            "and the run (`fw checkpoint --run --args …`), then end. `framework/bin/fw stop --clear` lifts the "
+            "request — only when the user asks to continue")
+
+
+def check_stop(prog, args):
+    """While a stop is pending: no new item, no rework, no new worktree, no merge."""
+    if stop_pending() is None:
+        return
+    if prog == "fw" or (prog.startswith("python") and args and args[0].endswith("fw.py")):
+        sub = (args[1:] if prog.startswith("python") else args)[:2]
+        if sub[:1] in (["start"], ["rework"]) or sub == ["worktree", "add"]:
+            raise Blocked(STOP_MSG.format(what=f"`fw {' '.join(sub)}`"))
+    if prog == "gh" and positionals(args)[:2] == ["pr", "merge"]:
+        raise Blocked(STOP_MSG.format(what="merging"))
 
 
 def git_out(*args):
@@ -336,6 +365,7 @@ def check_command(argv, heredocs):
         return check_line(args[args.index("-c") + 1])
     if prog == "eval":
         return check_line(" ".join(args))
+    check_stop(prog, args)
     if prog == "rm":
         check_rm(args)
         check_protected(positionals(args), "deleting")
@@ -391,6 +421,8 @@ def main():
             check_line(inp.get("command") or "")
         elif tool in ("Edit", "Write", "MultiEdit", "NotebookEdit"):
             check_protected([inp.get("file_path") or inp.get("notebook_path") or ""], "modifying")
+        elif tool in ("Agent", "Task") and stop_pending() is not None:
+            raise Blocked(STOP_MSG.format(what="launching a new agent"))
     except Blocked as e:
         print(f"Blocked by framework guard: {e}. If this is really needed, ask the user to run it themselves.",
               file=sys.stderr)

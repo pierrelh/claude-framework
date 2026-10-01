@@ -36,6 +36,21 @@ Switch any time: `framework/bin/fw autonomy assisted|auto` (then restart Claude 
   the run.
 - **Everything is a pull request**: any merged change can be reverted from GitHub.
 
+## Stopping a run
+`/fw-work all` runs until nothing is ready. To stop it cleanly:
+- **From another terminal**: `framework/bin/fw stop` (add `--now` not to wait for reviews
+  running in the background, `--reason "…"` to say why). For a cloud run or another
+  machine: `framework/bin/fw stop --remote` (a `FW_STOP` repository variable).
+- **In the session**: type "stop" — or press Esc to interrupt immediately, then say "stop".
+The run finishes its current step, starts nothing new (the guard refuses new agents, new
+items, rework and merges while the stop is pending), writes a **checkpoint** per item — the
+step to resume at, the next action, the context and the unresolved review findings — locally
+and as a "⏸ Paused" comment on the issue, saves the run's arguments, and ends. Stopped
+time counts neither as agent time nor as waiting time.
+
+Later: `/fw-work resume` continues exactly there (`fw resume` shows what is paused).
+`framework/bin/fw stop --clear` lifts the request without resuming.
+
 ## Risks you accept in auto mode
 Without permission prompts, Claude Code can run any other command on this machine and
 reach the network without asking. Use auto mode on a machine/account where that is
