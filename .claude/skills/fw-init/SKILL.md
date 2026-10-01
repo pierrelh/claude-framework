@@ -68,6 +68,10 @@ the next start of Claude Code — `claude --dangerously-skip-permissions` or sim
 (the local setting `permissions.defaultMode: bypassPermissions` is written to
 `.claude/settings.local.json`, which is git-ignored). The session can continue now.
 The mode can be changed any time with `fw autonomy <mode>`.
+Then offer the **check gate** (recommended in auto mode): with
+`framework/bin/fw config set gates.check_on_stop true`, an agent that changed code cannot
+finish while `fw check` (the project's lint/test commands) fails — the failing output is sent
+back to it once; a second attempt to stop is allowed so it can report `STATUS: BLOCKED`.
 
 ## Phase 4 — Git and GitHub
 Owner = the authenticated user (from doctor `login`). Ask: repository name (default: folder
@@ -98,7 +102,11 @@ projects will be *copied* with views included.
 Launch an `Explore` subagent (very thorough) to map: languages and frameworks with versions
 (from manifests/lockfiles), entry points, directory layout, test setup and how to run it,
 build/CI, database and migrations, conventions visible in the code, obvious risks/tech debt.
-Verify the commands you will document actually run (install/test/lint) when it is safe.
+Record the project's commands: `framework/bin/fw commands --detect` (from package.json,
+composer.json, pyproject, go.mod, Makefile…), adjust with the user, `--apply`, then fill gaps
+with `fw config set commands.<install|lint|typecheck|test|build> '"<command>"'`. When it is
+safe, run `framework/bin/fw check` and report what fails — don't fix it here, failing checks
+become backlog items. `CLAUDE.md → Commands` points to the same commands.
 Write the findings to `docs/architecture/overview.md` (with a Mermaid diagram) and a first
 pass of `CLAUDE.md` (Stack, Commands, Conventions, Architecture, Gotchas).
 
@@ -115,6 +123,10 @@ Gate: the user approves `docs/product/brief.md`.
   (WebSearch/WebFetch when available) — do not rely on memory.
 Record `fw config set stack '{"backend":"PHP 8.4 / Symfony 7.3","db":"PostgreSQL 17",...}'` and
 fill `CLAUDE.md → Stack` with versions and today's date.
+New project: also record the **planned** commands (`fw config set commands '{"install":…,
+"lint":…,"test":…}'`) — the walking-skeleton task makes them real, makes `fw check` pass and
+installs CI (`fw workflow install ci-<node|php|python|go|generic>`, then
+`fw protect --checks check` once it ran green).
 
 ## Phase 8 — Agent team
 Follow `.claude/skills/fw-team/SKILL.md`. Gate: the user picks the agents.
@@ -147,7 +159,11 @@ Follow `.claude/skills/fw-plan/SKILL.md` (capacity questions, estimate discussio
 7. Protect the default branch: `framework/bin/fw protect` (GitHub ruleset: pull request
    required, no force push, no deletion, no bypass). Exit code 4 = the plan does not allow it
    (private repository on GitHub Free): explain the options it prints and continue — the local
-   guard still applies. Required CI checks are added later with `fw protect --checks <names>`.
+   guard still applies.
+8. Adopt, when `fw check` passes: `framework/bin/fw workflow install ci-<stack>` (the stack
+   `fw commands --detect` suggests; `--env` for versions), commit it through a pull request,
+   and once it ran green `framework/bin/fw protect --checks check`. When it fails, the CI
+   setup becomes a backlog task instead.
 
 ## Phase 12 — Hand-over
 Summarise in the user's language: repo URL, board URL, number of epics/stories, total hours,

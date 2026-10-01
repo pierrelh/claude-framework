@@ -39,7 +39,8 @@ For each chosen agent, create `.claude/agents/<name>.md` from
 - `description`: what + when, specific enough for the orchestrator to choose it.
 - `tools`: least privilege — reviewer/QA/product-owner read-only (`Read, Grep, Glob, Bash`),
   implementers and doc writer get `Edit, Write` too.
-- Procedure with the project's **real** commands and paths; quality bar specific to the
+- Procedure with the project's **real** commands and paths (implementers and QA finish with
+  `framework/bin/fw check`, which runs `.fw/config.json → commands`); quality bar specific to the
   stack (e.g. PHP: strict types, PSR-12, PHPStan level, no SQL string concatenation…);
   output contract ending with the role token; explicit escalation rules.
 - Prompts in English; human-facing outputs in the configured languages.

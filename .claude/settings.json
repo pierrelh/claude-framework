@@ -29,6 +29,28 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/framework/hooks/check_gate.py\"",
+            "timeout": 1200
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/framework/hooks/check_gate.py\"",
+            "timeout": 1200
+          }
+        ]
+      }
     ]
   },
   "permissions": {

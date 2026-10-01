@@ -1,0 +1,32 @@
+# CI for a any-stack project. Installed by `framework/bin/fw workflow install ci-generic` into
+# .github/workflows/ci-generic.yml. It runs the commands of .fw/config.json → commands through
+# `fw check`, so CI and the agents always run the same thing: change a command there, not here.
+# The job is named `check`: make it required with `framework/bin/fw protect --checks check`.
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Ubuntu runners ship git, python3, make and common build tools; add the setup step your
+# stack needs (language runtime, services) before "Install dependencies".
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install dependencies
+        run: framework/bin/fw check install --if-configured
+      - name: Lint, type-check, test, build (.fw/config.json → commands)
+        run: framework/bin/fw check

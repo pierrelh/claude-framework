@@ -38,21 +38,24 @@ has no agent, do that step yourself, briefly.
    decide with a reasonable, reversible assumption, it posts the assumption as an issue
    comment and continues; otherwise escalate (see below).
 4. **Implement** (the agent in the issue's *Agent* field, else the first implementer):
-   tests first where practical, then code, following `CLAUDE.md`. It must run the project's
-   test/lint commands. `STATUS: BLOCKED` → escalate.
+   tests first where practical, then code, following `CLAUDE.md`. It must run
+   `framework/bin/fw check` (the project's lint/typecheck/test/build commands) and finish green.
+   `STATUS: BLOCKED` → escalate.
 5. **Review** on `git diff <default>...HEAD` by **every** agent listed in `roles.review` (a
    string or a list — e.g. a code reviewer and a security reviewer), run in parallel. The
    step passes only when **all** return `VERDICT: APPROVE`. Any `CHANGES_REQUESTED` → send
    the merged findings back to the implementer; max **3** review rounds, then escalate.
-6. **QA** (qa agent): verify every acceptance criterion with evidence (test names, command
-   output, observed behaviour). `QA: FAIL` → back to step 4 (counts as a review round).
+6. **QA** (qa agent): run `framework/bin/fw check` and verify every acceptance criterion with
+   evidence (test names, command output, observed behaviour). `QA: FAIL` → back to step 4 (counts as a review round).
 7. **Docs** (docs agent): update `docs/` and `CLAUDE.md` if behaviour, commands,
    conventions or architecture changed; ADR for significant decisions. `fw docs-check`.
 8. **PR**: commit (Conventional Commits, `(#<n>)`), push the branch, `gh pr create` with the
    template filled: summary, `Closes #<n>`, acceptance-criteria checklist with QA evidence,
    review verdict, tests run, docs updated, estimate vs actual. Then
    `framework/bin/fw review <n>`.
-9. **CI**: if the repo has workflows, `gh pr checks <pr> --watch` (fail → back to step 4).
+9. **CI**: if the repo has workflows, `gh pr checks <pr> --watch` (fail → back to step 4). CI
+   runs the same `fw check` as the agents, so a red CI that was green locally points at the
+   environment (versions, services, missing `install` command) — fix that, not the test.
 10. **Merge**:
     - auto: when every reviewer APPROVE + QA PASS + CI green → `gh pr merge <pr> --squash --delete-branch`.
     - assisted: give the PR link and a 3-line summary; ask with the prefix
