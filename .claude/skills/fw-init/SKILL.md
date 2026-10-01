@@ -68,6 +68,11 @@ the next start of Claude Code — `claude --dangerously-skip-permissions` or sim
 (the local setting `permissions.defaultMode: bypassPermissions` is written to
 `.claude/settings.local.json`, which is git-ignored). The session can continue now.
 The mode can be changed any time with `fw autonomy <mode>`.
+Then offer the **review pipeline** (both modes): with `framework/bin/fw pipeline on`, the
+implementer starts the next story while reviewers and QA check the previous one, in
+separate worktrees; at most 2 stories wait in review, rework comes first, merges stay one at
+a time. Faster; costs more tokens in parallel and an occasional rebase. In assisted mode it
+also means the next story starts before you merged the previous one.
 Then offer the **check gate** (recommended in auto mode): with
 `framework/bin/fw config set gates.check_on_stop true`, an agent that changed code cannot
 finish while `fw check` (the project's lint/test commands) fails — the failing output is sent

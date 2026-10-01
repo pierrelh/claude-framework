@@ -52,6 +52,9 @@ backlog file before applying, or with `fw set-field <n> "Agent effort (h)" <h>` 
 - The report gives, per milestone, the date its **Musts** are done and the date everything is
   done. Hours are converted to workdays; epics span their children; milestone due
   dates are the latest target date of their items.
+- With the review pipeline on (`pipeline.enabled`), there is one implementer lane and an
+  item occupies it for its agent hours only: its human review runs while the next item is
+  implemented (dependents still wait for the review).
 - Closed items keep their dates. Re-run `fw schedule --apply` whenever scope, estimates or
   capacity change — `/fw-work` does it after every merged story.
 

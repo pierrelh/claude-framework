@@ -16,5 +16,9 @@
       4,
       5
     ]
+  },
+  "pipeline": {
+    "enabled": false,
+    "review_wip": 2
   }
 }

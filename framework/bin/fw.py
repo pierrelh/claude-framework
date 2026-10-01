@@ -1182,7 +1182,8 @@ def agent_effort(it):
 
 def compute_schedule(items, capacity, start=None):
     hpd = float(capacity.get("hours_per_day", 6))
-    lanes = max(1, int(capacity.get("parallel_lanes", 1)))
+    pipelined = bool(capacity.get("pipeline"))  # one implementer; review runs while it starts the next item
+    lanes = 1 if pipelined else max(1, int(capacity.get("parallel_lanes", 1)))
     workdays = set(capacity.get("workdays", [1, 2, 3, 4, 5]))
     base = align(max(start or today(), today()), workdays)
     work = [i for i in items if i.get(F_TYPE) != "Epic" and i.get(F_PRIO) != "Won't"]
@@ -1227,7 +1228,8 @@ def compute_schedule(items, capacity, start=None):
         else:
             lane = min(range(lanes), key=lambda k: max(cursor[k], earliest))
             s = max(cursor[lane], earliest)
-            e = cursor[lane] = s + effort(it)
+            e = s + effort(it)
+            cursor[lane] = s + agent_effort(it) if pipelined else e
         ends[n] = e + float(it.get("wait_days") or 0) * hpd
         e = ends[n]
         plan[n] = (add_workdays(base, int(s // hpd), workdays),
@@ -1262,7 +1264,8 @@ def cmd_schedule(a):
     items = load_items(ctx)
     start = parse_date(a.start) if a.start else (parse_date(c["capacity"]["start_date"])
                                                  if dig(c, "capacity.start_date") else None)
-    plan, cyclic, missing = compute_schedule(items, c.get("capacity", {}), start)
+    capacity = dict(c.get("capacity", {}), pipeline=bool(dig(c, "pipeline.enabled")))
+    plan, cyclic, missing = compute_schedule(items, capacity, start)
     by_num = {i["number"]: i for i in items}
     if cyclic:
         warn("dependency cycle between: " + ", ".join(f"#{n}" for n in cyclic))
@@ -2255,6 +2258,151 @@ def cmd_commands(a):
         print("(dry run — `--apply` adds the missing ones; existing commands are never replaced)")
 
 
+# --------------------------------------------------------------------------- review pipeline / worktrees
+
+DEFAULT_REVIEW_WIP = 2
+
+
+def pipeline_state(items, conf, local_timers=()):
+    """Can the implementer start a new item? One implementer at a time; at most `review_wip` items
+    waiting in review; rework (an item sent back to In progress) always comes first."""
+    p = conf.get("pipeline") or {}
+    wip = int(p.get("review_wip", DEFAULT_REVIEW_WIP))
+    flight = [i for i in items if i["state"] == "OPEN" and i.get(F_TYPE) != "Epic"
+              and i["status"] in ("in progress", "in review") and "needs-human" not in i["labels"]]
+    brief = lambda i: {"number": i["number"], "title": i["title"], "status": i["status"],  # noqa: E731
+                       "mine": str(i["number"]) in local_timers}
+    in_review = [brief(i) for i in flight if i["status"] == "in review"]
+    in_progress = [brief(i) for i in flight if i["status"] == "in progress"]
+    # the limits apply to this machine's pipeline; items started elsewhere are listed, not counted
+    busy = [i for i in in_progress if i["mine"]]
+    waiting = [i for i in in_review if i["mine"]]
+    if not p.get("enabled"):
+        can, reason = not busy, ("pipeline disabled: one item at a time" if busy
+                                 else "pipeline disabled: free to start")
+    elif busy:
+        in_progress = busy + [i for i in in_progress if not i["mine"]]
+        can, reason = False, (f"the implementer is busy with #{busy[0]['number']} "
+                              "(finish it, or its rework, first)")
+    elif len(waiting) >= wip:
+        can, reason = False, (f"review limit reached ({len(waiting)}/{wip}): wait for a review result "
+                              "or a merge — rework comes first")
+    else:
+        can, reason = True, f"{len(waiting)}/{wip} in review: the implementer may start the next item"
+    return {"enabled": bool(p.get("enabled")), "review_wip": wip, "can_start": can, "reason": reason,
+            "in_progress": in_progress, "in_review": in_review}
+
+
+def cmd_pipeline(a):
+    c = cfg()
+    if a.action in ("on", "off"):
+        c.setdefault("pipeline", {})["enabled"] = a.action == "on"
+        if a.wip is not None:
+            c["pipeline"]["review_wip"] = a.wip
+        c["pipeline"].setdefault("review_wip", DEFAULT_REVIEW_WIP)
+        save_json(CONFIG, c)
+        print(f"✔ review pipeline {a.action} (at most {c['pipeline']['review_wip']} item(s) in review)")
+        return
+    st = pipeline_state(load_items(gh_ctx()), c, timers())
+    if a.json:
+        print(json.dumps(st, indent=2, ensure_ascii=False))
+        return
+    print(("✔ " if st["can_start"] else "· ") + st["reason"])
+    for k in ("in_progress", "in_review"):
+        for i in st[k]:
+            print(f"  {i['status']:<12} #{i['number']} {i['title']}" + ("" if i["mine"] else "  (other machine)"))
+
+
+def worktrees_base(root=None):
+    root = (root or ROOT).resolve()
+    return root.parent / f"{root.name}.worktrees"
+
+
+def slugify(text, limit=40):
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower().encode("ascii", "ignore").decode()).strip("-")
+    return s[:limit].rstrip("-") or "item"
+
+
+def branch_for(it):
+    prefix = "hotfix" if "hotfix" in it.get("labels", []) else \
+        {"Bug": "fix", "Task": "chore"}.get(it.get(F_TYPE), "feat")
+    return f"{prefix}/{it['number']}-{slugify(it['title'])}"
+
+
+def worktree_list(root=None):
+    """Story worktrees (under <repo>.worktrees/) with branch, dirty flag and commits ahead."""
+    root = root or ROOT
+    base = worktrees_base(root)
+    out, cur = [], {}
+    for line in run(["git", "worktree", "list", "--porcelain"], check=False, cwd=root).stdout.splitlines() + [""]:
+        if line.startswith("worktree "):
+            cur = {"path": line[9:]}
+        elif line.startswith("branch "):
+            cur["branch"] = line[7:].replace("refs/heads/", "")
+        elif not line and cur.get("path"):
+            path = Path(cur["path"])
+            if base in path.parents:
+                m = re.match(r"(\d+)-", path.name)
+                cur.update(number=int(m.group(1)) if m else None,
+                           dirty=bool(run(["git", "status", "--porcelain"], check=False, cwd=path).stdout.strip()))
+                out.append(cur)
+            cur = {}
+    return out
+
+
+def cmd_worktree(a):
+    if a.action == "list":
+        wts = worktree_list()
+        if a.json:
+            print(json.dumps(wts, indent=2))
+        for w in [] if a.json else wts:
+            print(f"#{w['number']:<5} {w.get('branch', '?'):<45} {'dirty ' if w['dirty'] else ''}{w['path']}")
+        return
+    if a.issue is None:
+        die("issue number required")
+    existing = next((w for w in worktree_list() if w["number"] == a.issue), None)
+    if a.action == "remove":
+        if not existing:
+            print(f"no worktree for #{a.issue}")
+            return
+        if existing["dirty"]:
+            die(f"{existing['path']} has uncommitted changes — commit them or ask the user before removing it")
+        run(["git", "worktree", "remove", existing["path"]])
+        run(["git", "worktree", "prune"], check=False)
+        print(f"✔ removed {existing['path']} (branch {existing.get('branch')} kept)")
+        return
+    if existing:  # add is idempotent: resuming an item reuses its worktree
+        print(existing["path"])
+        return
+    ctx = gh_ctx()
+    _, it = get_item(ctx, a.issue)
+    branch = a.branch or branch_for(it)
+    path = worktrees_base() / f"{a.issue}-{slugify(it['title'], 30)}"
+    default = dig(cfg(), "github.default_branch") or "main"
+    run(["git", "fetch", "--quiet", "origin", default], check=False)
+    has_local = run(["git", "rev-parse", "--verify", "--quiet", f"refs/heads/{branch}"], check=False).returncode == 0
+    has_remote = run(["git", "rev-parse", "--verify", "--quiet", f"refs/remotes/origin/{branch}"],
+                     check=False).returncode == 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if has_local:
+        run(["git", "worktree", "add", str(path), branch])
+    elif has_remote:
+        run(["git", "worktree", "add", "--track", "-b", branch, str(path), f"origin/{branch}"])
+    else:
+        start = f"origin/{default}" if run(["git", "rev-parse", "--verify", "--quiet", f"origin/{default}"],
+                                           check=False).returncode == 0 else default
+        run(["git", "worktree", "add", "-b", branch, str(path), start])
+    print(path)
+
+
+def cmd_rework(a):
+    ctx = gh_ctx()
+    _, it = get_item(ctx, a.issue)
+    set_item_field(ctx, project_fields(ctx["project_id"]), it["item_id"], F_STATUS, "in progress")
+    log_event(a.issue, "start")
+    print(f"#{a.issue} → In progress (rework)")
+
+
 # --------------------------------------------------------------------------- resume / triage / release
 
 BRANCH_RE = r"^(?:feat|fix|chore|hotfix|docs)/{n}-"
@@ -2641,6 +2789,23 @@ def main():
     s.add_argument("--actual", type=float, help="agent hours (default: measured from fw start / review / escalate)")
     s.add_argument("--rounds", type=int, help="review rounds the item needed (1 = approved first time)")
     s.set_defaults(fn=cmd_done)
+
+    s = sub.add_parser("pipeline", help="review pipeline: on/off, or whether the implementer may start a new item")
+    s.add_argument("action", nargs="?", choices=["status", "on", "off"], default="status")
+    s.add_argument("--wip", type=int, help=f"items allowed in review at once (default {DEFAULT_REVIEW_WIP})")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_pipeline)
+
+    s = sub.add_parser("worktree", help="one git worktree per item, next to the repository (<repo>.worktrees/)")
+    s.add_argument("action", choices=["add", "list", "remove"])
+    s.add_argument("issue", type=int, nargs="?")
+    s.add_argument("--branch", help="branch name (default: feat|fix|chore|hotfix/<n>-<slug>)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_worktree)
+
+    s = sub.add_parser("rework", help="→ In progress again after changes were requested (resumes the agent timer)")
+    s.add_argument("issue", type=int)
+    s.set_defaults(fn=cmd_rework)
 
     s = sub.add_parser("resume", help="interrupted items (in progress / in review) and where /fw-work picks them up")
     s.add_argument("--json", action="store_true")
