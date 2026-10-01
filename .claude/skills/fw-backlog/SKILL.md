@@ -29,7 +29,8 @@ technical tasks that do not fit a story. For a new project the first item is the
 path); everything else depends on it directly or transitively.
 For each story: persona/want/benefit, ≥ 2 acceptance criteria (Given/When/Then, including an
 error or edge case), a success measure, out-of-scope, technical notes, agent assignment,
-priority, dependencies, and the estimate (agent hours with multipliers, review hours, size).
+priority, dependencies, and the estimate (agent hours with multipliers, review hours, size —
+then the calibration notes of `CLAUDE.md` from `/fw-retro`, when there are any).
 Split anything above L.
 
 ## 3. Write the batch file

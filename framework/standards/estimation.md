@@ -56,6 +56,12 @@ backlog file before applying, or with `fw set-field <n> "Agent effort (h)" <h>` 
   capacity change — `/fw-work` does it after every merged story.
 
 ## Calibration
-`fw done` records **Actual (h)** (time since `fw start`). `fw status` prints the
-actual/estimated ratio. When it drifts beyond ±30 % over 5+ items, tell the user and scale
-the remaining estimates (or the capacity) accordingly.
+`fw start`, `fw review` and `fw escalate` log a timeline per item (`.fw/local/timers.json`).
+`fw done` turns it into **Actual (h)** — agent working time only (from each start to the
+pull request or an escalation) — comparable with **Agent effort (h)**, and **Wait (h)** —
+time spent waiting on a human (PR approval, escalation answers). `--rounds` records the
+review rounds. Human review effort is not measured.
+`fw status` prints the actual/estimated ratio and `fw metrics` breaks it down by size, type
+and agent. When it drifts beyond ±30 % over 5+ items, tell the user and scale the remaining
+estimates (or the capacity) accordingly; `/fw-retro` does this analysis per milestone and
+records the calibration in `CLAUDE.md`, which `/fw-backlog` and `/fw-plan` apply.

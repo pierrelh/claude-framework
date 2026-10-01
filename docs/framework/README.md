@@ -17,6 +17,7 @@ requests and keep this documentation up to date.
 | Add a feature or report a bug | `/fw-backlog <your words>` |
 | Re-estimate or re-plan | `/fw-plan` |
 | Change the agent team | `/fw-team` |
+| Learn from a finished milestone | `/fw-retro` |
 | Refresh the docs | `/fw-docs` |
 | Check your machine / GitHub access | `/fw-doctor` |
 | Get the latest framework | `/fw-update` |

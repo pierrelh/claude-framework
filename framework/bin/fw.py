@@ -41,6 +41,7 @@ DEFAULT_EFFORT = 2.0
 F_STATUS, F_TYPE, F_PRIO, F_SIZE = "Status", "Item type", "Priority", "Size"
 F_EFFORT, F_REVIEW, F_ACTUAL = "Agent effort (h)", "Human review (h)", "Actual (h)"
 F_START, F_TARGET, F_AGENT = "Start date", "Target date", "Agent"
+F_WAIT, F_ROUNDS = "Wait (h)", "Review rounds"
 
 PROJECT_FIELDS = [
     (F_TYPE, "SINGLE_SELECT", [("Epic", "PURPLE"), ("Story", "BLUE"), ("Task", "GRAY"), ("Bug", "RED")]),
@@ -52,6 +53,8 @@ PROJECT_FIELDS = [
     (F_START, "DATE", None),
     (F_TARGET, "DATE", None),
     (F_AGENT, "TEXT", None),
+    (F_WAIT, "NUMBER", None),
+    (F_ROUNDS, "NUMBER", None),
 ]
 STATUS_OPTIONS = [
     ("Backlog", "GRAY", "Waiting on dependencies or refinement"),
@@ -1166,8 +1169,12 @@ def add_workdays(base, n, workdays):
 
 
 def effort(it):
+    return agent_effort(it) + float(it.get(F_REVIEW) or 0)
+
+
+def agent_effort(it):
     e = it.get(F_EFFORT)
-    return (float(e) if e is not None else DEFAULT_EFFORT) + float(it.get(F_REVIEW) or 0)
+    return float(e) if e is not None else DEFAULT_EFFORT
 
 
 def compute_schedule(items, capacity, start=None):
@@ -1377,6 +1384,53 @@ def timers():
     return load_json(LOCAL / "timers.json", {})
 
 
+def log_event(issue, event, when=None):
+    """Append start / review / pause to the item's local timeline (.fw/local/timers.json)."""
+    t = timers()
+    cur = t.get(str(issue))
+    if cur is None and event != "start":
+        return  # not started on this machine: nothing to measure
+    events = timeline(cur)
+    events.append([event, (when or dt.datetime.now()).isoformat(timespec="seconds")])
+    t[str(issue)] = {"events": events}
+    save_json(LOCAL / "timers.json", t)
+
+
+def timeline(entry):
+    """Events of a timer entry; the pre-0.7 format was a bare start timestamp."""
+    if entry is None:
+        return []
+    if isinstance(entry, str):
+        return [["start", entry]]
+    return [list(e) for e in entry.get("events", [])]
+
+
+def split_time(events, end):
+    """(agent hours, waiting hours) from a timeline: agent time runs from each start to the next
+    review / pause; waiting time from a review / pause to the next start, or to the end."""
+    agent = wait = 0.0
+    working = waiting = None
+    for event, at in events:
+        at = dt.datetime.fromisoformat(at)
+        if event == "start":
+            if waiting is not None:
+                wait += (at - waiting).total_seconds()
+                waiting = None
+            if working is None:
+                working = at
+        elif event in ("review", "pause"):
+            if working is not None:
+                agent += (at - working).total_seconds()
+                working = None
+            if waiting is None:
+                waiting = at
+    if working is not None:
+        agent += (end - working).total_seconds()
+    if waiting is not None:
+        wait += (end - waiting).total_seconds()
+    return round(agent / 3600, 1), round(wait / 3600, 1)
+
+
 def cmd_start(a):
     ctx = gh_ctx()
     _, it = get_item(ctx, a.issue)
@@ -1386,9 +1440,7 @@ def cmd_start(a):
         die(f"#{a.issue} is already {it['status']} — someone (another machine or a cloud run) may be on it. "
             "Use --force to take it over.", code=3)
     set_item_field(ctx, project_fields(ctx["project_id"]), it["item_id"], F_STATUS, "in progress")
-    t = timers()
-    t.setdefault(str(a.issue), dt.datetime.now().isoformat(timespec="seconds"))
-    save_json(LOCAL / "timers.json", t)
+    log_event(a.issue, "start")
     print(f"#{a.issue} → In progress ({it['title']})")
 
 
@@ -1396,6 +1448,7 @@ def cmd_review(a):
     ctx = gh_ctx()
     _, it = get_item(ctx, a.issue)
     set_item_field(ctx, project_fields(ctx["project_id"]), it["item_id"], F_STATUS, "in review")
+    log_event(a.issue, "review")
     print(f"#{a.issue} → In review")
 
 
@@ -1408,12 +1461,17 @@ def cmd_done(a):
         rest("PATCH", f"repos/{ctx['repo']}/issues/{a.issue}", {"state": "closed", "state_reason": "completed"})
     it["state"], it["status"] = "CLOSED", "done"
     t = timers()
-    started = t.pop(str(a.issue), None)
-    if a.actual is not None or started:
-        hours = a.actual if a.actual is not None else round(
-            (dt.datetime.now() - dt.datetime.fromisoformat(started)).total_seconds() / 3600, 1)
+    events = timeline(t.pop(str(a.issue), None))
+    agent_h, wait_h = split_time(events, dt.datetime.now()) if events else (None, None)
+    hours = a.actual if a.actual is not None else agent_h
+    if hours is not None:
         set_item_field(ctx, fields, it["item_id"], F_ACTUAL, hours)
-        print(f"#{a.issue} actual: {hours:g} h (estimated {effort(it):g} h)")
+        print(f"#{a.issue} actual: {hours:g} h of agent work (estimated {agent_effort(it):g} h)")
+    if wait_h is not None:
+        set_item_field(ctx, fields, it["item_id"], F_WAIT, wait_h)
+        print(f"#{a.issue} waited {wait_h:g} h on review / answers")
+    if a.rounds is not None:
+        set_item_field(ctx, fields, it["item_id"], F_ROUNDS, a.rounds)
     save_json(LOCAL / "timers.json", t)
     print(f"#{a.issue} → Done")
 
@@ -1439,7 +1497,7 @@ def status_summary(ctx, items):
     done_n = {i["number"] for i in work if i["state"] == "CLOSED" or i["status"] == "done"}
     done = [i for i in work if i["number"] in done_n]
     done_h = sum(effort(i) for i in done)
-    actual = [(effort(i), float(i[F_ACTUAL])) for i in done if i.get(F_ACTUAL) is not None]
+    actual = [(agent_effort(i), float(i[F_ACTUAL])) for i in done if i.get(F_ACTUAL) is not None]
     ms = {}
     for i in work:
         if i.get("milestone"):
@@ -1492,14 +1550,15 @@ def cmd_status(a):
         by["done" if i["state"] == "CLOSED" else i["status"]].append(i)
     total = sum(effort(i) for i in work)
     done_h = sum(effort(i) for i in by["done"])
-    actual = [(effort(i), float(i[F_ACTUAL])) for i in by["done"] if i.get(F_ACTUAL) is not None]
+    actual = [(agent_effort(i), float(i[F_ACTUAL])) for i in by["done"] if i.get(F_ACTUAL) is not None]
     print(f"Project: {ctx['project_url']}")
     print("Items:   " + ", ".join(f"{k}: {len(v)}" for k, v in sorted(by.items())))
     print(f"Effort:  {done_h:g} / {total:g} h done ({(100 * done_h / total) if total else 0:.0f}%), "
           f"{total - done_h:g} h remaining")
     if actual:
         est, act = sum(x for x, _ in actual), sum(y for _, y in actual)
-        print(f"Accuracy: {act:g} h actual vs {est:g} h estimated on {len(actual)} item(s) (ratio {act / est:.2f})")
+        print(f"Accuracy: {act:g} h of agent work vs {est:g} h estimated on {len(actual)} item(s) "
+              f"(ratio {act / est:.2f}) — details: fw metrics")
     targets = [i[F_TARGET] for i in work if i["state"] == "OPEN" and i.get(F_TARGET)]
     if targets:
         print(f"Projected end: {max(targets)}")
@@ -1518,12 +1577,83 @@ def cmd_status(a):
             print(f"Needs attention: #{i['number']} {i['title']} ({', '.join(i['labels'])})")
 
 
+def metrics_summary(items, milestone=None):
+    """Done items: agent estimate vs actual, waits and review rounds, grouped and with outliers."""
+    def in_ms(i):
+        return milestone is None or str(milestone) in (str(i.get("milestone")), i.get("milestone_title"))
+
+    rows = []
+    for i in items:
+        if i.get(F_TYPE) == "Epic" or not (i["state"] == "CLOSED" or i["status"] == "done") or not in_ms(i):
+            continue
+        est, act = agent_effort(i), i.get(F_ACTUAL)
+        rows.append({"number": i["number"], "title": i["title"], "type": i.get(F_TYPE), "size": i.get(F_SIZE),
+                     "agent": i.get(F_AGENT), "estimate": est,
+                     "actual": float(act) if act is not None else None,
+                     "ratio": round(float(act) / est, 2) if act is not None and est > 0 else None,
+                     "wait": float(i[F_WAIT]) if i.get(F_WAIT) is not None else None,
+                     "rounds": int(i[F_ROUNDS]) if i.get(F_ROUNDS) is not None else None,
+                     "escalated": "needs-human" in i["labels"]})
+    measured = [r for r in rows if r["ratio"] is not None]
+
+    def group(key):
+        out = {}
+        for r in measured:
+            g = out.setdefault(r[key] or "-", {"items": 0, "estimate": 0.0, "actual": 0.0})
+            g["items"] += 1
+            g["estimate"] += r["estimate"]
+            g["actual"] += r["actual"]
+        for g in out.values():
+            g["ratio"] = round(g["actual"] / g["estimate"], 2) if g["estimate"] else None
+        return dict(sorted(out.items()))
+
+    est, act = sum(r["estimate"] for r in measured), sum(r["actual"] for r in measured)
+    rounds = [r["rounds"] for r in rows if r["rounds"] is not None]
+    waits = sorted(r["wait"] for r in rows if r["wait"] is not None)
+    return {
+        "milestone": milestone, "done": len(rows), "measured": len(measured),
+        "estimate": est, "actual": act, "ratio": round(act / est, 2) if est else None,
+        "by_size": group("size"), "by_type": group("type"), "by_agent": group("agent"),
+        "review_rounds": {"average": round(sum(rounds) / len(rounds), 2), "first_time_approved":
+                          sum(1 for x in rounds if x <= 1), "items": len(rounds)} if rounds else None,
+        "wait": {"total": sum(waits), "median": waits[len(waits) // 2], "max": waits[-1]} if waits else None,
+        "outliers": [r for r in rows if (r["ratio"] is not None and not 0.5 <= r["ratio"] <= 2)
+                     or (r["rounds"] or 0) >= 3],
+        "items": rows,
+    }
+
+
+def cmd_metrics(a):
+    m = metrics_summary(load_items(gh_ctx()), a.milestone)
+    if a.json:
+        print(json.dumps(m, indent=2, ensure_ascii=False))
+        return
+    scope = f"milestone {a.milestone}" if a.milestone else "all milestones"
+    print(f"{m['done']} done item(s) in {scope}, {m['measured']} with measured agent time")
+    if m["ratio"] is not None:
+        print(f"Agent time: {m['actual']:g} h actual / {m['estimate']:g} h estimated (ratio {m['ratio']:.2f})")
+    for title, key in (("size", "by_size"), ("type", "by_type"), ("agent", "by_agent")):
+        if m[key]:
+            print(f"  by {title}: " + ", ".join(f"{k} {g['ratio']:.2f} ({g['items']})" for k, g in m[key].items()
+                                                if g["ratio"] is not None))
+    if m["review_rounds"]:
+        r = m["review_rounds"]
+        print(f"Review rounds: {r['average']:g} on average, {r['first_time_approved']}/{r['items']} approved first time")
+    if m["wait"]:
+        print(f"Waiting on humans: {m['wait']['total']:g} h in total, median {m['wait']['median']:g} h, "
+              f"max {m['wait']['max']:g} h")
+    for r in m["outliers"]:
+        print(f"Outlier #{r['number']} {r['title']}: {r['actual']} h / {r['estimate']:g} h"
+              + (f", {r['rounds']} review rounds" if r["rounds"] else ""))
+
+
 def schema():
     return {
         "contract_version": CONTRACT_VERSION,
         "framework_version": framework_version(),
         "fields": {"status": F_STATUS, "item_type": F_TYPE, "priority": F_PRIO, "size": F_SIZE,
                    "agent_effort": F_EFFORT, "human_review": F_REVIEW, "actual": F_ACTUAL,
+                   "wait": F_WAIT, "review_rounds": F_ROUNDS,
                    "start_date": F_START, "target_date": F_TARGET, "agent": F_AGENT},
         "field_types": {n: t for n, t, _ in PROJECT_FIELDS},
         "field_options": {n: [o for o, _ in opts] for n, _, opts in PROJECT_FIELDS if opts},
@@ -1653,6 +1783,7 @@ def cmd_escalate(a):
               + (visible(options[a.recommended or 0]) if options else "yes") + f"` (or `/answer {esc['id']} …`)._"]
     c = rest("POST", f"repos/{ctx['repo']}/issues/{a.issue}/comments", {"body": "\n".join(lines)})
     set_needs_human(ctx["repo"], a.issue, True)
+    log_event(a.issue, "pause")
     esc["comment_url"] = c["html_url"]
     print(json.dumps(esc, indent=2, ensure_ascii=False))
 
@@ -2322,8 +2453,14 @@ def main():
 
     s = sub.add_parser("done", help="→ Done: close, record actual hours, unblock dependents, close epic")
     s.add_argument("issue", type=int)
-    s.add_argument("--actual", type=float, help="actual hours (default: time since `fw start`)")
+    s.add_argument("--actual", type=float, help="agent hours (default: measured from fw start / review / escalate)")
+    s.add_argument("--rounds", type=int, help="review rounds the item needed (1 = approved first time)")
     s.set_defaults(fn=cmd_done)
+
+    s = sub.add_parser("metrics", help="estimates vs actuals, review rounds and waits of done items (for /fw-retro)")
+    s.add_argument("--milestone", help="title or number")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_metrics)
 
     s = sub.add_parser("set-status", help="move an issue to a status (backlog|ready|in progress|in review|done)")
     s.add_argument("issue", type=int)
