@@ -78,6 +78,9 @@ LABELS = [
     ("bug", "d73a4a", "Something is broken"),
     ("blocked", "b60205", "Cannot progress"),
     ("needs-human", "fbca04", "Requires a human decision or action"),
+    ("hotfix", "e11d21", "Urgent fix: goes before everything else (/fw-work short path)"),
+    ("triage", "ededed", "Not qualified yet — /fw-triage"),
+    ("needs-info", "d4c5f9", "Waiting for more information from the reporter"),
 ]
 GITIGNORE_LINES = [
     ".claude/settings.local.json",
@@ -1339,7 +1342,8 @@ def ready_items(items):
             continue
         if all(d in closed or d not in known for d in i["deps"]):
             out.append(i)
-    return sorted(out, key=lambda i: (PRIO_RANK.get(i.get(F_PRIO), 1), i.get(F_START) or "9999", i["number"]))
+    return sorted(out, key=lambda i: ("hotfix" not in i["labels"], PRIO_RANK.get(i.get(F_PRIO), 1),
+                                      i.get(F_START) or "9999", i["number"]))
 
 
 def cmd_next(a):
@@ -2251,6 +2255,187 @@ def cmd_commands(a):
         print("(dry run — `--apply` adds the missing ones; existing commands are never replaced)")
 
 
+# --------------------------------------------------------------------------- resume / triage / release
+
+BRANCH_RE = r"^(?:feat|fix|chore|hotfix|docs)/{n}-"
+
+
+def resume_plan(it, branches, prs, current, dirty, mine, ahead):
+    """Where /fw-work should pick an interrupted item up. `branches`: local and remote branch names;
+    `prs`: [{number, state, headRefName, url}]; `ahead`: {branch: commits ahead of the default branch}."""
+    n = it["number"]
+    branch = next((b for b in branches if re.match(BRANCH_RE.format(n=n), b)), None)
+    pr = None
+    for state in ("OPEN", "MERGED", "CLOSED"):
+        pr = pr or next((p for p in prs if p["headRefName"] == branch and p["state"] == state), None)
+    out = {"number": n, "title": it["title"], "status": it["status"], "mine": mine, "branch": branch,
+           "pr": pr["number"] if pr else None, "pr_state": pr["state"] if pr else None}
+    if pr and pr["state"] == "MERGED":
+        step, action = 11, f"PR #{pr['number']} is merged: close the loop (`fw done {n}`)"
+    elif not mine:
+        step, action = None, ("started elsewhere (another machine or a cloud run): leave it — "
+                              "`fw start --force` only with the user")
+    elif pr and pr["state"] == "OPEN":
+        step = 9
+        action = f"PR #{pr['number']} is open: " + ("watch CI, then the merge decision" if it["status"] == "in review"
+                                                    else f"`fw review {n}`, then CI and the merge decision")
+    elif pr:
+        step, action = None, f"PR #{pr['number']} was closed without merging: ask the user"
+    elif branch and current == branch and dirty:
+        step, action = 4, "uncommitted work on the branch: continue implementing, then `fw check`"
+    elif branch and ahead.get(branch):
+        step, action = 5, (f"{ahead[branch]} commit(s) on {branch}, no PR: check out the branch, "
+                           "`fw check`, then review")
+    elif branch:
+        step, action = 3, f"{branch} exists but has no work yet: check it out and start at the spec check"
+    else:
+        step, action = 2, "nothing on disk: create the branch and start at the spec check"
+    out.update(step=step, action=action)
+    return out
+
+
+def cmd_resume(a):
+    ctx = gh_ctx()
+    items = [i for i in load_items(ctx) if i["state"] == "OPEN" and i["status"] in ("in progress", "in review")
+             and i.get(F_TYPE) != "Epic"]
+    mine = set(timers())
+    default = (run(["git", "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], check=False).stdout.strip()
+               or "origin/main")
+    local = run(["git", "branch", "--format=%(refname:short)"], check=False).stdout.split()
+    remote = [line.split("refs/heads/", 1)[1] for line in
+              run(["git", "ls-remote", "--heads", "origin"], check=False).stdout.splitlines() if "refs/heads/" in line]
+    p = gh("pr", "list", "--state", "all", "--limit", "200", "--json", "number,state,headRefName,url", check=False)
+    prs = json.loads(p.stdout or "[]") if p.returncode == 0 else []
+    current = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], check=False).stdout.strip()
+    dirty = bool(run(["git", "status", "--porcelain"], check=False).stdout.strip())
+    ahead = {}
+    for b in set(local):
+        c = run(["git", "rev-list", "--count", f"{default}..{b}"], check=False).stdout.strip()
+        ahead[b] = int(c) if c.isdigit() else 0
+    plans = [resume_plan(i, local + [b for b in remote if b not in local], prs, current, dirty,
+                         str(i["number"]) in mine, ahead) for i in items]
+    if a.json:
+        print(json.dumps(plans, indent=2, ensure_ascii=False))
+        return
+    if not plans:
+        print("nothing to resume — no item in progress or in review")
+    for r in plans:
+        print(f"#{r['number']:<5} {r['status']:<12} " + (f"step {r['step']:<3}" if r["step"] else "skip    ")
+              + f" {r['title']}\n       {r['action']}")
+
+
+def untriaged(issues, items):
+    """Open issues that are not on the board, carry `triage`, or lack a type or an estimate."""
+    by_number = {i["number"]: i for i in items}
+    out = []
+    for issue in issues:
+        if "pull_request" in issue or issue.get("state", "open") != "open":
+            continue
+        labels = [lbl["name"] for lbl in issue.get("labels", [])]
+        it = by_number.get(issue["number"])
+        reasons = []
+        if not it:
+            reasons.append("not on the board")
+        else:
+            if not it.get(F_TYPE):
+                reasons.append("no item type")
+            elif it.get(F_TYPE) != "Epic" and it.get(F_EFFORT) is None and "needs-human" not in labels:
+                reasons.append("no estimate")
+        if "triage" in labels:
+            reasons.append("labelled triage")
+        if reasons:
+            out.append({"number": issue["number"], "title": issue["title"], "url": issue.get("html_url"),
+                        "author": (issue.get("user") or {}).get("login"),
+                        "association": issue.get("author_association"), "labels": labels,
+                        "created": issue.get("created_at"), "comments": issue.get("comments", 0),
+                        "waiting_info": "needs-info" in labels, "reasons": reasons,
+                        "body": (issue.get("body") or "")[:1500]})
+    return out
+
+
+def cmd_untriaged(a):
+    ctx = gh_ctx()
+    issues, page = [], 1
+    while True:
+        batch = rest("GET", f"repos/{ctx['repo']}/issues?state=open&per_page=100&page={page}")
+        if not batch:
+            break
+        issues += batch
+        page += 1
+    out = untriaged(issues, load_items(ctx))
+    if a.json:
+        print(json.dumps(out, indent=2, ensure_ascii=False))
+        return
+    if not out:
+        print("✔ every open issue is on the board, typed and estimated")
+    for i in out:
+        print(f"#{i['number']:<5} {i['title']}  [{', '.join(i['reasons'])}]"
+              + ("  (waiting for info)" if i["waiting_info"] else ""))
+
+
+CC_RE = re.compile(r"^(?P<type>[a-zA-Z]+)(?:\((?P<scope>[^)]*)\))?(?P<bang>!)?:\s*(?P<desc>.+)$")
+RELEASE_GROUPS = [("Breaking", None), ("Added", "feat"), ("Fixed", "fix"), ("Changed", "perf"),
+                  ("Changed", "refactor"), ("Changed", "revert"), ("Security", "security")]
+INTERNAL_TYPES = {"docs", "chore", "test", "tests", "ci", "build", "style"}
+
+
+def parse_commit(subject, body=""):
+    m = CC_RE.match(subject.strip())
+    pr = re.search(r"\(#(\d+)\)\s*$", subject)
+    desc = re.sub(r"\s*\(#\d+\)\s*$", "", m.group("desc") if m else subject.strip())
+    return {"type": m.group("type").lower() if m else None, "scope": m.group("scope") if m else None,
+            "breaking": bool(m and m.group("bang")) or "BREAKING CHANGE" in (body or ""),
+            "description": desc, "pr": int(pr.group(1)) if pr else None}
+
+
+def next_version(current, commits):
+    major, minor, patch = (list(vtuple(current)) + [0, 0, 0])[:3]
+    if any(c["breaking"] for c in commits):
+        return f"{major + 1}.0.0" if major > 0 else f"0.{minor + 1}.0"
+    if any(c["type"] == "feat" for c in commits):
+        return f"{major}.{minor + 1}.0"
+    return f"{major}.{minor}.{patch + 1}"
+
+
+def release_notes(commits, version, date):
+    groups = defaultdict(list)
+    for c in commits:
+        if c["breaking"]:
+            name = "Breaking"
+        elif c["type"] in INTERNAL_TYPES:
+            continue
+        else:
+            name = next((g for g, t in RELEASE_GROUPS if t and t == c["type"]), "Other")
+        groups[name].append(c)
+    lines = [f"## {version} — {date}"]
+    for name in ["Breaking", "Added", "Fixed", "Changed", "Security", "Other"]:
+        if groups[name]:
+            lines += ["", f"### {name}"]
+            for c in groups[name]:
+                lines.append(f"- {(c['scope'] + ': ') if c['scope'] else ''}{c['description']}"
+                             + (f" (#{c['pr']})" if c["pr"] else ""))
+    return "\n".join(lines)
+
+
+def cmd_release_notes(a):
+    since = a.since or run(["git", "describe", "--tags", "--abbrev=0", "--match", "v[0-9]*"],
+                           check=False).stdout.strip()
+    log = run(["git", "log", "--format=%H%x1f%s%x1f%b%x1e", *([f"{since}..HEAD"] if since else [])]).stdout
+    commits = []
+    for rec in log.split("\x1e"):
+        parts = rec.strip("\n").split("\x1f")
+        if len(parts) >= 2 and parts[1]:
+            commits.append(dict(parse_commit(parts[1], parts[2] if len(parts) > 2 else ""), sha=parts[0][:9]))
+    current = a.current or (since.lstrip("v") if re.match(r"^v?\d+\.\d+", since or "") else "0.0.0")
+    version = a.version or next_version(current, commits)
+    notes = release_notes(commits, version, today().isoformat())
+    if a.json:
+        print(json.dumps({"since": since or None, "current": current, "version": version, "commits": commits,
+                          "notes": notes}, indent=2, ensure_ascii=False))
+    else:
+        print(notes if commits else f"no commit since {since or 'the beginning'}")
+
+
 # --------------------------------------------------------------------------- drift / changelog / migrations
 
 def lock_path(root=None):
@@ -2456,6 +2641,21 @@ def main():
     s.add_argument("--actual", type=float, help="agent hours (default: measured from fw start / review / escalate)")
     s.add_argument("--rounds", type=int, help="review rounds the item needed (1 = approved first time)")
     s.set_defaults(fn=cmd_done)
+
+    s = sub.add_parser("resume", help="interrupted items (in progress / in review) and where /fw-work picks them up")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_resume)
+
+    s = sub.add_parser("untriaged", help="open issues not on the board, labelled triage, or without type/estimate")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_untriaged)
+
+    s = sub.add_parser("release-notes", help="Conventional Commits since the last v* tag → notes and next version")
+    s.add_argument("--since", help="tag or ref (default: the latest v* tag)")
+    s.add_argument("--current", help="current version (default: from the tag)")
+    s.add_argument("--version", help="force the next version")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_release_notes)
 
     s = sub.add_parser("metrics", help="estimates vs actuals, review rounds and waits of done items (for /fw-retro)")
     s.add_argument("--milestone", help="title or number")

@@ -22,13 +22,19 @@ Parse its final status token (`SPEC:`, `STATUS:`, `VERDICT:`, `QA:`, `DOCS:`). I
 has no agent, do that step yourself, briefly.
 
 ## Loop — for each item
-0. **Preconditions**: clean working tree; `git checkout <default> && git pull`.
+0. **Resume first**: `framework/bin/fw resume --json` lists the items left in progress / in
+   review (a crash, a closed session, a merge done on GitHub). For each item started on this
+   machine, continue it from the `step` it gives (11 = close the loop, 9 = PR open, 5 =
+   commits without PR, 4 = uncommitted work on its branch — don't stash or reset it, 3/2 =
+   restart the item); `step: null` = started elsewhere or PR closed without merge: leave it,
+   mention it in the report. Only then:
+   **Preconditions**: clean working tree; `git checkout <default> && git pull`.
    Headless session (`FW_HEADLESS=1` or `CI=true`): you cannot ask anyone — every question
    goes through `fw escalate` (see *Escalation*).
 1. **Pick**: first resume answered questions — `framework/bin/fw escalations --json`, items in
    state `answered` go first (use the answer, then `fw resolve <n>` once applied). Otherwise
-   `framework/bin/fw next` (or the requested issue). Assisted mode: show the top
-   candidates and confirm. Auto mode: take the first.
+   `framework/bin/fw next` (or the requested issue) — `hotfix` items always come first.
+   Assisted mode: show the top candidates and confirm. Auto mode: take the first.
 2. **Start**: `framework/bin/fw start <n>` — exit code 3 means the item is already in progress
    elsewhere (another machine or a cloud run): skip it and pick the next one, never `--force`
    without the user. Then `git checkout -b feat/<n>-<slug>` (`fix/` for bugs,
@@ -75,6 +81,18 @@ has no agent, do that step yourself, briefly.
 12. **Continue?** auto + `all`/N: next item. Assisted: ask. When the item closed the last
     open item of a milestone, suggest `/fw-retro <milestone>` (auto mode: run it at the end of
     the run, proposals wait for the user).
+
+## Hotfix — short path for items labelled `hotfix`
+Same loop, faster, without dropping a safety net:
+- Branch `hotfix/<n>-<slug>`; skip the spec check when the bug has steps and expected /
+  actual behaviour (otherwise escalate: a hotfix on a guess is worse than the bug).
+- Implement **regression test first**: it must fail on the current code (quote the failure),
+  then the smallest fix that makes it pass; no refactoring, no unrelated change.
+- `fw check`, then one review by every `roles.review` agent focused on correctness and
+  security of the diff (still max 3 rounds); QA verifies the regression test and the
+  criteria. Docs only if behaviour visible to users changed.
+- PR title `fix: <title> (#<n>)`, label `hotfix`; merge rules unchanged (assisted: the user
+  approves; auto: green gates). Then suggest `/fw-release patch`.
 
 ## Escalation — stop the item, never guess
 Follow `framework/standards/escalation.md`: `framework/bin/fw escalate <n> --kind

@@ -46,7 +46,22 @@ rules (`.claude/review-rules.md`) and agent improvements, each approved by you. 
 you can do are `owner: human` (they don't take agent time) and can carry `wait_days` for
 calendar waiting (store review, account approval).
 
-## 5. Machine-readable contract (for tools and apps)
+## 5. Around the loop
+- **Interrupted work** — a crash or a closed session leaves items *In progress*:
+  `/fw-work` first runs `fw resume`, which looks at each item's branch, uncommitted
+  changes and pull request and continues from the right step (items started on another
+  machine are left alone).
+- **Incoming issues** — bug reports from users or teammates (the bug form labels them
+  `triage`): `/fw-triage` spots duplicates, asks reporters for missing information, and
+  qualifies, estimates and boards the rest.
+- **Urgent fixes** — label the bug `hotfix`: it goes before everything in `fw next`, and
+  `/fw-work` takes a short path (regression test first, smallest fix, one focused review,
+  CI) — then `/fw-release patch`.
+- **Releases** — `/fw-release`: notes from the Conventional Commits since the last tag,
+  semantic version, `CHANGELOG.md` and version bump through a PR, tag, GitHub release,
+  milestone closed. It always asks you before publishing.
+
+## 6. Machine-readable contract (for tools and apps)
 Tools built on the framework read it through a versioned contract instead of parsing text:
 - `fw schema --json` — field names, statuses, priorities, labels, body markers,
   `contract_version` and `framework_version`;

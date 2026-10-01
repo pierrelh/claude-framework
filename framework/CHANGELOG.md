@@ -3,6 +3,25 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.8.0 — 2026-10-01
+### Added
+- `fw resume [--json]`: items left in progress / in review, with the step `/fw-work` resumes
+  them from (branch, uncommitted work, commits ahead, open / merged / closed PR); items
+  started on another machine are left alone. `/fw-work` runs it before picking new work.
+- Hotfix path: `hotfix` label, first in `fw next`; `/fw-work` short path (regression test
+  first, smallest fix, one focused review, CI), branch `hotfix/<n>-<slug>`.
+- `/fw-triage` and `fw untriaged [--json]`: open issues not on the board, labelled `triage`
+  or without type / estimate → duplicate, needs info, hotfix, bug, story, or handed to
+  `/fw-backlog`. Labels `triage` and `needs-info`; the bug form adds `triage`.
+- `/fw-release` and `fw release-notes [--since] [--current] [--version] [--json]`: notes
+  grouped from the Conventional Commits since the last `v*` tag, next semantic version,
+  CHANGELOG and version bump through a PR, annotated tag, GitHub release, milestone closed.
+  Always confirmed by the user, even in auto mode.
+### Upgrading from an older version
+- Re-run `framework/bin/fw github-setup` once to create the `hotfix`, `triage` and
+  `needs-info` labels. `.github/ISSUE_TEMPLATE/bug.yml` is a project file: add `triage` to
+  its labels if you want new reports to land in `/fw-triage`.
+
 ## 0.7.0 — 2026-10-01
 ### Added
 - Time is measured per phase: `fw start`, `fw review` and `fw escalate` log a timeline in
