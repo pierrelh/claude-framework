@@ -17,3 +17,4 @@ Answer in the user's language, short:
    what exactly is expected from the user.
 5. Next up (top 3) and the suggested command (`/fw-work`, `/fw-work all`).
 If the estimate accuracy ratio drifts beyond ±30 %, mention it and suggest `/fw-plan`.
+For a visual view (progress bars, burn-up, timeline), suggest `/fw-dashboard`.

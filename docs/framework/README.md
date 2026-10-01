@@ -12,7 +12,7 @@ requests and keep this documentation up to date.
 ## Daily commands
 | You want to… | Type |
 |---|---|
-| Know where things stand | `/fw-status` |
+| Know where things stand | `/fw-status` (summary) · `/fw-dashboard` (progress bars, burn-up, timeline — `/fw-dashboard html` in the browser) |
 | Make progress | `/fw-work` (one story) · `/fw-work all` (chain, auto mode) |
 | Add a feature or report a bug | `/fw-backlog <your words>` |
 | Re-estimate or re-plan | `/fw-plan` |

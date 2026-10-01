@@ -13,6 +13,7 @@ import datetime as dt
 import fnmatch
 import hashlib
 import heapq
+import importlib.util
 import json
 import math
 import os
@@ -318,8 +319,8 @@ FIELDS_Q = """query($id:ID!){ node(id:$id){ ... on ProjectV2 { fields(first:50){
 ITEMS_Q = """query($id:ID!,$after:String){ node(id:$id){ ... on ProjectV2 { items(first:100, after:$after){
   pageInfo{ hasNextPage endCursor }
   nodes{ id
-    content{ __typename ... on Issue { id number title state body url
-      milestone{ number title } parent{ number } labels(first:20){ nodes{ name } } } }
+    content{ __typename ... on Issue { id number title state body url createdAt closedAt
+      milestone{ number title dueOn } parent{ number } labels(first:20){ nodes{ name } } } }
     fieldValues(first:30){ nodes{ __typename
       ... on ProjectV2ItemFieldTextValue { text field{ ... on ProjectV2FieldCommon { name } } }
       ... on ProjectV2ItemFieldNumberValue { number field{ ... on ProjectV2FieldCommon { name } } }
@@ -359,6 +360,9 @@ def load_items(ctx):
                 "state": c["state"], "body": c.get("body") or "", "url": c["url"],
                 "milestone": (c.get("milestone") or {}).get("number"),
                 "milestone_title": (c.get("milestone") or {}).get("title"),
+                "milestone_due": ((c.get("milestone") or {}).get("dueOn") or "")[:10] or None,
+                "created_at": (c.get("createdAt") or "")[:10] or None,
+                "closed_at": (c.get("closedAt") or "")[:10] or None,
                 "parent": (c.get("parent") or {}).get("number"),
                 "labels": [lbl["name"] for lbl in c["labels"]["nodes"]],
             }
@@ -2271,6 +2275,174 @@ def cmd_commands(a):
         print("(dry run — `--apply` adds the missing ones; existing commands are never replaced)")
 
 
+# --------------------------------------------------------------------------- dashboard
+
+def week_start(d):
+    return d - dt.timedelta(days=d.weekday())
+
+
+def burnup(work, today_, weeks=16):
+    """Weekly scope and done hours (agent + human review) up to this week, at most `weeks` weeks back."""
+    dates = [parse_date(i["created_at"]) for i in work if i.get("created_at")] + \
+            [parse_date(i["closed_at"]) for i in work if i.get("closed_at")]
+    if not dates:
+        return []
+    first = max(week_start(min(dates)), week_start(today_) - dt.timedelta(weeks=weeks - 1))
+    out, w = [], first
+    while w <= week_start(today_):
+        end = w + dt.timedelta(days=6)
+        scope = sum(effort(i) for i in work if not i.get("created_at") or parse_date(i["created_at"]) <= end)
+        done = sum(effort(i) for i in work if i.get("closed_at") and parse_date(i["closed_at"]) <= end
+                   and (i["state"] == "CLOSED" or i["status"] == "done"))
+        out.append({"week": w.isoformat(), "scope": round(scope, 1), "done": round(done, 1)})
+        w += dt.timedelta(weeks=1)
+    return out
+
+
+def custom_metrics(conf, root=None):
+    """Project metrics: `dashboard.metrics` = [{"title", "command", "unit"?, "target"?, "better"?: "higher"|"lower"}].
+    The command prints a number, or JSON {"value", "target"?, "unit"?, "detail"?}."""
+    out = []
+    for m in (conf.get("dashboard") or {}).get("metrics") or []:
+        r = {"title": m.get("title") or m.get("command"), "unit": m.get("unit", ""), "target": m.get("target"),
+             "better": m.get("better", "higher"), "value": None, "detail": None, "error": None}
+        try:
+            p = subprocess.run(m["command"], shell=True, cwd=str(root or ROOT), capture_output=True, text=True,
+                               timeout=float(m.get("timeout", 30)), stdin=subprocess.DEVNULL)
+            text = p.stdout.strip()
+            if p.returncode != 0:
+                r["error"] = (p.stderr or text or f"exit {p.returncode}").strip().splitlines()[-1][:200]
+            elif text.startswith("{"):
+                d = json.loads(text)
+                r.update({k: d[k] for k in ("value", "target", "unit", "detail") if k in d})
+            else:
+                r["value"] = float(text.split()[0])
+        except (subprocess.TimeoutExpired, ValueError, KeyError, IndexError) as e:
+            r["error"] = type(e).__name__
+        if r["value"] is not None and r["target"] is not None:
+            r["ok"] = (r["value"] >= r["target"]) if r["better"] == "higher" else (r["value"] <= r["target"])
+        out.append(r)
+    return out
+
+
+def dashboard_data(items, conf, today_=None, local_timers=(), extra=None):
+    """Everything the dashboard shows, as plain data (`fw dashboard --json`)."""
+    today_ = today_ or today()
+    is_done = lambda i: i["state"] == "CLOSED" or i["status"] == "done"  # noqa: E731
+    work = [i for i in items if i.get(F_TYPE) != "Epic" and i.get(F_PRIO) != "Won't"]
+    done = [i for i in work if is_done(i)]
+    hours_total, hours_done = sum(effort(i) for i in work), sum(effort(i) for i in done)
+
+    def brief(i):
+        return {"number": i["number"], "title": i["title"], "url": i.get("url"), "status": i["status"],
+                "type": i.get(F_TYPE), "priority": i.get(F_PRIO), "agent": i.get(F_AGENT),
+                "start": i.get(F_START), "target": i.get(F_TARGET), "labels": i["labels"],
+                "milestone": i.get("milestone_title")}
+
+    milestones = {}
+    for i in work:
+        if not i.get("milestone"):
+            continue
+        m = milestones.setdefault(i["milestone"], {"number": i["milestone"], "title": i["milestone_title"],
+                                                   "due": i.get("milestone_due"), "items": 0, "done": 0,
+                                                   "hours": 0.0, "hours_done": 0.0, "target": None,
+                                                   "musts_target": None})
+        m["items"] += 1
+        m["hours"] += effort(i)
+        if is_done(i):
+            m["done"] += 1
+            m["hours_done"] += effort(i)
+        elif i.get(F_TARGET):
+            m["target"] = max(m["target"] or "", i[F_TARGET])
+            if i.get(F_PRIO) == "Must":
+                m["musts_target"] = max(m["musts_target"] or "", i[F_TARGET])
+    for m in milestones.values():
+        if m["done"] == m["items"]:
+            m["health"] = "done"
+        elif not m["due"]:
+            m["health"] = "no due date"
+        elif m["musts_target"] and m["musts_target"] > m["due"]:
+            m["health"] = "late"
+        elif m["target"] and m["target"] > m["due"]:
+            m["health"] = "at risk"
+        elif m["due"] < today_.isoformat():
+            m["health"] = "late"
+        else:
+            m["health"] = "on track"
+
+    epics = []
+    for e in (i for i in items if i.get(F_TYPE) == "Epic"):
+        kids = [i for i in work if i.get("parent") == e["number"]]
+        if kids:
+            epics.append({"number": e["number"], "title": e["title"], "url": e.get("url"),
+                          "milestone": e.get("milestone_title"), "items": len(kids),
+                          "done": sum(1 for i in kids if is_done(i)),
+                          "hours": sum(effort(i) for i in kids), "hours_done": sum(effort(i) for i in kids
+                                                                                    if is_done(i))})
+
+    curve = burnup(work, today_)
+    recent = [i for i in done if i.get("closed_at")
+              and parse_date(i["closed_at"]) > today_ - dt.timedelta(weeks=4)]
+    velocity = round(sum(effort(i) for i in recent) / 4, 1)
+    remaining = hours_total - hours_done
+    forecast = (today_ + dt.timedelta(weeks=remaining / velocity)).isoformat() if velocity and remaining else None
+    open_items = [i for i in work if not is_done(i)]
+    upcoming = sorted((i for i in open_items if i.get(F_START)), key=lambda i: (i[F_START], i["number"]))[:12]
+    m = metrics_summary(items)
+    return {
+        "generated": dt.datetime.now().isoformat(timespec="minutes"), "today": today_.isoformat(),
+        "project": conf.get("name") or ROOT.name, "repo": dig(conf, "github.repo"),
+        "project_url": dig(conf, "github.project_url"), "framework_version": framework_version(),
+        "autonomy": conf.get("autonomy", "assisted"),
+        "progress": {"items": len(work), "done": len(done), "hours": hours_total, "hours_done": hours_done,
+                     "projected_end": max((i[F_TARGET] for i in open_items if i.get(F_TARGET)), default=None)},
+        "milestones": sorted(milestones.values(), key=lambda x: (x["due"] or "9999", x["number"])),
+        "epics": sorted(epics, key=lambda x: (x["done"] == x["items"], x["number"])),
+        "flow": {k: sum(1 for i in work if ("done" if is_done(i) else i["status"]) == k)
+                 for k in ("backlog", "ready", "in progress", "in review", "done")},
+        "in_flight": [brief(i) for i in open_items if i["status"] in ("in progress", "in review")],
+        "needs_you": [brief(i) for i in open_items if {"needs-human", "blocked"} & set(i["labels"])],
+        "hotfixes": [brief(i) for i in open_items if "hotfix" in i["labels"]],
+        "upcoming": [brief(i) for i in upcoming],
+        "burnup": curve, "velocity": {"hours_per_week": velocity, "forecast_end": forecast},
+        "estimates": {"ratio": m["ratio"], "measured": m["measured"], "review_rounds": m["review_rounds"],
+                      "wait": m["wait"], "by_size": m["by_size"]},
+        "pipeline": pipeline_state(items, conf, local_timers),
+        "custom": (extra or {}).get("custom", []),
+    }
+
+
+def dashboard_module():
+    spec = importlib.util.spec_from_file_location("fw_dashboard", Path(__file__).with_name("fw_dashboard.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def cmd_dashboard(a):
+    c = cfg()
+    data = dashboard_data(load_items(gh_ctx()), c, local_timers=timers(),
+                          extra={"custom": [] if a.no_custom else custom_metrics(c)})
+    if a.json:
+        print(json.dumps(data, indent=2, ensure_ascii=False))
+        return
+    view = dashboard_module()
+    if not a.html:
+        print(view.render_text(data, color=sys.stdout.isatty() and not os.environ.get("NO_COLOR")))
+        return
+    out = Path(a.out) if a.out else LOCAL / "dashboard.html"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(view.render_html(data), encoding="utf-8")
+    print(f"✔ {out}")
+    if a.open:
+        opener = next((o for o in ("wslview", "xdg-open", "open") if shutil.which(o)), None)
+        if opener:
+            subprocess.run([opener, str(out)], capture_output=True)
+        else:
+            import webbrowser
+            webbrowser.open(out.resolve().as_uri())
+
+
 # --------------------------------------------------------------------------- review pipeline / worktrees
 
 DEFAULT_REVIEW_WIP = 2
@@ -2979,6 +3151,15 @@ def main():
     s.add_argument("--actual", type=float, help="agent hours (default: measured from fw start / review / escalate)")
     s.add_argument("--rounds", type=int, help="review rounds the item needed (1 = approved first time)")
     s.set_defaults(fn=cmd_done)
+
+    s = sub.add_parser("dashboard", help="progress, milestones, epics, flow, burn-up, estimates — terminal or HTML")
+    s.add_argument("--html", action="store_true", help="write a self-contained HTML page (default "
+                                                       ".fw/local/dashboard.html)")
+    s.add_argument("--out", help="with --html: where to write it")
+    s.add_argument("--open", action="store_true", help="with --html: open it in the browser")
+    s.add_argument("--no-custom", action="store_true", help="skip the project metrics (dashboard.metrics)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_dashboard)
 
     s = sub.add_parser("pipeline", help="review pipeline: on/off, or whether the implementer may start a new item")
     s.add_argument("action", nargs="?", choices=["status", "on", "off"], default="status")
