@@ -8,6 +8,7 @@ Switch any time: `framework/bin/fw autonomy assisted|auto` (then restart Claude 
 | Starting a story | you confirm | the agent picks the next ready one |
 | Merging | you approve (or merge on GitHub) | the agent merges when review, QA and CI are green |
 | Chaining stories | one at a time | `/fw-work all` runs until nothing is ready |
+| Review pipeline (optional, `fw pipeline on`) | the next story starts while the previous one waits for review or for your merge — each start still confirmed | the implementer never waits: reviews, QA and CI of up to 2 stories run in the background |
 | Brief, team, initial backlog | your approval | your approval |
 
 ## Safety nets that stay on in auto mode

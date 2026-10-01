@@ -7,7 +7,7 @@ description: Summarise where the project stands — progress per milestone, hour
 
 Run in one Bash call:
 ```
-framework/bin/fw status; echo; framework/bin/fw next --limit 5; echo; gh pr list --limit 10
+framework/bin/fw status; echo; framework/bin/fw next --limit 5; echo; framework/bin/fw pipeline; echo; gh pr list --limit 10
 ```
 Answer in the user's language, short:
 1. One sentence overall (e.g. "MVP 60 % done, on track for 14 Nov").

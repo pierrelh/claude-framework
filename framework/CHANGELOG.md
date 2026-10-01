@@ -3,6 +3,25 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.9.0 — 2026-10-01
+### Added
+- Review pipeline (`pipeline.enabled`, both autonomy modes; `fw pipeline on|off [--wip N]`):
+  one implementer that starts the next item while reviewers, QA and CI check the previous
+  ones in the background — at most `review_wip` (default 2) items in review, rework first,
+  no item depending on an unmerged one, overlapping files avoided, merges one at a time with
+  the other branches rebased after each. `fw pipeline [--json]` says whether a new item may
+  start; items escalated or started on another machine are not counted.
+- `fw worktree add|list|remove`: one worktree per item in `<repo>.worktrees/<n>-<slug>`
+  (outside the repository, so test runners and linters never scan it), branch named from
+  the item; `add` is idempotent and reuses an existing branch; `remove` refuses uncommitted work.
+- `fw rework <n>`: back to In progress after changes were requested, resuming the agent timer.
+### Changed
+- `fw schedule` with the pipeline on: one implementer lane, occupied for the agent hours
+  only — human review overlaps the next item, dependents still wait for it.
+- The guard protects framework-owned files inside story worktrees too; the check gate checks
+  every changed story worktree, not only the main checkout.
+- `/fw-status` shows the pipeline state; `/fw-init` offers the pipeline.
+
 ## 0.8.0 — 2026-10-01
 ### Added
 - `fw resume [--json]`: items left in progress / in review, with the step `/fw-work` resumes

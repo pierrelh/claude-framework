@@ -80,11 +80,18 @@ def protected_patterns():
 def rel_to_root(path):
     root = ROOT.resolve()
     cwd = Path.cwd().resolve()
-    base = cwd if cwd == root or root in cwd.parents else root
+    wt = root.parent / f"{root.name}.worktrees"
+    base = cwd if cwd == root or root in cwd.parents or wt in cwd.parents else root
     p = Path(os.path.expanduser(path))
     p = (p if p.is_absolute() else base / p).resolve()
     try:
         return p.relative_to(root).as_posix()
+    except ValueError:
+        pass
+    worktrees = root.parent / f"{root.name}.worktrees"  # `fw worktree`: <repo>.worktrees/<n>-<slug>/…
+    try:
+        parts = p.relative_to(worktrees).parts
+        return "/".join(parts[1:]) if len(parts) > 1 else None
     except ValueError:
         return None
 

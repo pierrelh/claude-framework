@@ -27,7 +27,8 @@ has no agent, do that step yourself, briefly.
    machine, continue it from the `step` it gives (11 = close the loop, 9 = PR open, 5 =
    commits without PR, 4 = uncommitted work on its branch — don't stash or reset it, 3/2 =
    restart the item); `step: null` = started elsewhere or PR closed without merge: leave it,
-   mention it in the report. Only then:
+   mention it in the report. With the pipeline on, reuse each item's worktree
+   (`fw worktree list`). Only then:
    **Preconditions**: clean working tree; `git checkout <default> && git pull`.
    Headless session (`FW_HEADLESS=1` or `CI=true`): you cannot ask anyone — every question
    goes through `fw escalate` (see *Escalation*).
@@ -110,7 +111,48 @@ it), and move to the next item. Escalate when:
 Stop the whole run (auto mode) after **3 escalations in a row** or if CI/tooling is broken
 for every item.
 
-## Parallel lanes (auto mode, `capacity.parallel_lanes` > 1)
+## Review pipeline (`pipeline.enabled`, both modes)
+One implementer that never waits for reviews; several readers in parallel. Turn it on or off
+with `framework/bin/fw pipeline on|off [--wip N]` (default: at most **2** items in review).
+The loop above still applies to each item; what changes is the scheduling:
+- **Worktrees**: every item lives in its own worktree, `framework/bin/fw worktree add <n>`
+  (prints the path, next to the repository: `<repo>.worktrees/<n>-<slug>`; branch
+  `feat|fix|chore|hotfix/<n>-<slug>`); run `fw check install --if-configured` in it once.
+  Give every agent the worktree's absolute path and tell it to work only there. Run `fw`
+  board commands (`start`, `review`, `rework`, `done`, `escalate`…) from the main checkout;
+  only the project's own commands (`fw check`) run inside the worktree.
+- **One writer**: only one implementer runs at a time, in the foreground. When it finishes an
+  item (step 4 green), `framework/bin/fw review <n>`, then launch the reviewers and QA for
+  that item **in the background** (Agent `run_in_background`, all in parallel, read-only, in
+  its worktree) and go straight on.
+- **What next** — in this order, every time the implementer is free:
+  1. **Rework**: an item came back (`CHANGES_REQUESTED`, `QA: FAIL`, red CI, rebase conflict)
+     → `framework/bin/fw rework <n>`, implementer in that item's worktree with the complete
+     findings (it remembers nothing: give the issue, the diff summary and every finding),
+     `fw check`, `fw review <n>`, new background review of the changed diff.
+  2. **New item** only if `framework/bin/fw pipeline --json` says `can_start` (the implementer
+     is free and fewer than `review_wip` items are in review). Pick with `fw next`, skipping
+     items that depend on an unmerged item (`fw next` already does) and items whose expected
+     files (explorer map) overlap the diff of an item in review
+     (`git diff --name-only <default>...<branch>`) — prefer another item, or wait.
+  3. Otherwise wait for the next background result.
+- **When a review/QA result arrives**: approved + QA PASS → docs agent in that worktree,
+  commit, push, PR, `fw review` already done, CI in the background. Assisted mode: ask for the
+  merge as usual — the implementer keeps working while you decide.
+- **Merges one at a time**. After each merge: `fw done <n> --rounds <r>`,
+  `fw worktree remove <n>`, then for every other item in review: `git rebase
+  origin/<default>` in its worktree — clean → `fw check` (and `git push --force-with-lease`
+  if its PR exists); conflicts → `git rebase --abort`, then it is rework (the implementer
+  rebases and resolves, and the changed diff is reviewed again).
+- **Assisted mode**: confirm once per run that the pipeline may start the next item while
+  the previous one is in review, then confirm each item start as usual.
+- Escalated items leave the pipeline (`needs-human` is not counted); their worktree stays.
+  Stop starting new items when 2 items in a row come back from review — the queue is not
+  converging; finish the rework first.
+- `capacity.parallel_lanes` is ignored while the pipeline is on (one implementer by design);
+  `fw schedule` then lets human review overlap the next item.
+
+## Parallel lanes (auto mode, `capacity.parallel_lanes` > 1, pipeline off)
 Only for ready items with no dependency between them and no overlapping files. Run each
 implementer with `isolation: "worktree"`, one branch/PR per item; review, QA and merge stay
 sequential; rebase the later branches after each merge.
