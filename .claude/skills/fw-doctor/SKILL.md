@@ -22,6 +22,8 @@ description: Check that this machine can run the framework (git, GitHub CLI, aut
    - `GH_TOKEN`/`GITHUB_TOKEN` set: it overrides `gh auth login`; a fine-grained token must
      grant Issues, Projects, Contents, Pull requests and Workflows (read/write).
    - `claude` not in PATH: only matters for launching auto mode from a terminal.
+   - `commands` without `test`: the quality gate has nothing to run — offer
+     `framework/bin/fw commands --detect` (then `--apply`).
    - `branch-rules` not protected: offer `framework/bin/fw protect` (needs admin rights; not
      available for private repositories on GitHub Free).
    - `framework-drift`: framework-owned files were edited in this project and the next

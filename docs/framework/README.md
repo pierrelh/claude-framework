@@ -20,6 +20,7 @@ requests and keep this documentation up to date.
 | Refresh the docs | `/fw-docs` |
 | Check your machine / GitHub access | `/fw-doctor` |
 | Get the latest framework | `/fw-update` |
+| Run the project's checks | `framework/bin/fw check` — see [quality gates](quality-gates.md) |
 
 ## What lives where
 | Path | Owner | Content |

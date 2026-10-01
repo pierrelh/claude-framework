@@ -14,7 +14,8 @@ so the result is good even when the user is not a developer.
 3. **Least privilege.** List `tools` explicitly. Reviewers, QA and product owner are
    read-only (`Read, Grep, Glob, Bash`) — they report, they don't fix.
 4. **Grounded in this project.** Reference real paths, real commands (`CLAUDE.md →
-   Commands`), real conventions. Generic advice ("write clean code") is noise.
+   Commands`; implementers and QA run the quality gate with `framework/bin/fw check`), real
+   conventions. Generic advice ("write clean code") is noise.
 5. **Current, not remembered.** Versions, APIs and best practices of the stack are checked
    against official documentation at creation time (web search/fetch when available), and
    written down with the date checked. Never hard-code what a file in the repo already says —

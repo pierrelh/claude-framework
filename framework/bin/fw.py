@@ -489,6 +489,10 @@ def cmd_doctor(a):
     repo["project_files"] = len(code)
     repo["project_files_sample"] = code[:15]
 
+    if repo["initialized"]:
+        cmds = cfg().get("commands") or {}
+        add("commands", bool(cmds.get("test")), ", ".join(k for k in COMMAND_KEYS if cmds.get(k)) or "none configured",
+            "framework/bin/fw commands --detect --apply (or fw config set commands.test '\"…\"')", required=False)
     d = drift()
     if d is not None:
         changed = [f for k in ("modified", "added", "deleted") for f in d[k]]
@@ -1721,9 +1725,20 @@ def cmd_workflow(a):
     dst = ROOT / ".github" / "workflows" / src.name
     if dst.exists() and not a.force:
         die(f"{dst.relative_to(ROOT)} exists — use --force to overwrite")
+    text = src.read_text(encoding="utf-8")
+    for kv in a.env or []:
+        key, _, value = kv.partition("=")
+        text, n = re.subn(rf'^(\s+{re.escape(key)}:\s*)"[^"\n]*"', lambda m: f'{m.group(1)}"{value}"', text, count=1,
+                          flags=re.M)
+        if not n:
+            die(f"{src.name} has no env variable {key}")
     dst.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(src, dst)
+    dst.write_text(text, encoding="utf-8")
     print(f"✔ installed {dst.relative_to(ROOT)}")
+    if src.name.startswith("ci-"):
+        if not (cfg().get("commands") or {}).get("test"):
+            print("  ! .fw/config.json → commands has no `test` — CI fails until it does (`fw commands --detect`)")
+        print("  once it has run green on a pull request, require it: framework/bin/fw protect --checks check")
     needed = re.findall(r"secrets\.([A-Z0-9_]+)", src.read_text())
     needed = sorted(set(needed) - {"GITHUB_TOKEN"})
     if needed:
@@ -1962,6 +1977,147 @@ def cmd_update(a):
     if m.returncode != 0:
         die("migrations failed — fix the error above, then re-run `framework/bin/fw migrate`")
     print("\n✔ framework files updated — review `git diff --staged`, run `fw lint-agents`, then commit.")
+
+
+# --------------------------------------------------------------------------- project commands / check
+
+CHECK_STEPS = ["lint", "typecheck", "test", "build"]   # what `fw check` runs, in this order, when configured
+COMMAND_KEYS = ["install"] + CHECK_STEPS
+
+
+def cmd_check(a):
+    """Run the project's commands (.fw/config.json → commands): the one quality gate for agents, hooks and CI."""
+    cmds = cfg().get("commands") or {}
+    wanted = a.steps or [k for k in CHECK_STEPS if cmds.get(k)]
+    missing = [k for k in wanted if not cmds.get(k)]
+    if missing and not a.if_configured:
+        die(f"commands.{missing[0]} is not configured — `fw commands --detect`, or "
+            f"`fw config set commands.{missing[0]} '\"<command>\"'`", 2)
+    steps = [k for k in wanted if cmds.get(k)]
+    if not steps:
+        if a.if_configured:
+            print("nothing to run (no matching command in .fw/config.json → commands)")
+            return
+        die("no commands configured (.fw/config.json → commands) — run `fw commands --detect`", 2)
+    results = []
+    for k in steps:
+        if not a.json:
+            print(f"▶ {k}: {cmds[k]}", flush=True)
+        t0 = dt.datetime.now()
+        p = subprocess.run(cmds[k], shell=True, cwd=str(ROOT), text=True,
+                           capture_output=a.json, stdin=subprocess.DEVNULL)
+        r = {"name": k, "command": cmds[k], "exit": p.returncode,
+             "seconds": round((dt.datetime.now() - t0).total_seconds(), 1)}
+        if a.json:
+            r["output_tail"] = "\n".join(((p.stdout or "") + (p.stderr or "")).splitlines()[-60:])
+        results.append(r)
+        if p.returncode != 0 and a.fail_fast:
+            break
+    ok = all(r["exit"] == 0 for r in results) and len(results) == len(steps)
+    if a.json:
+        print(json.dumps({"ok": ok, "steps": results}, indent=2, ensure_ascii=False))
+    else:
+        print("\n" + "  ".join(f"{'✔' if r['exit'] == 0 else '✘'} {r['name']} ({r['seconds']:g}s)" for r in results))
+    sys.exit(0 if ok else 1)
+
+
+def make_targets(root):
+    mk = root / "Makefile"
+    if not mk.exists():
+        return set()
+    return set(re.findall(r"^([A-Za-z][\w-]*):(?!=)", mk.read_text(encoding="utf-8", errors="replace"), re.M))
+
+
+def detect_commands(root=None):
+    """Best-effort commands and CI template from the files in the repository. Returns (commands, ci, sources)."""
+    root = root or ROOT
+    has = lambda *names: any((root / n).exists() for n in names)  # noqa: E731
+    text = lambda n: (root / n).read_text(encoding="utf-8", errors="replace") if (root / n).exists() else ""  # noqa: E731
+    cmds, ci, src = {}, "generic", []
+
+    if has("package.json"):
+        ci, src = "node", src + ["package.json"]
+        scripts = (json.loads(text("package.json") or "{}").get("scripts") or {})
+        if has("pnpm-lock.yaml"):
+            cmds["install"], runner = "pnpm install --frozen-lockfile", "pnpm"
+        elif has("yarn.lock"):
+            cmds["install"], runner = "yarn install --immutable", "yarn"
+        else:
+            cmds["install"], runner = ("npm ci" if has("package-lock.json") else "npm install"), "npm run"
+        for key, names in (("lint", ["lint"]), ("typecheck", ["typecheck", "type-check", "tsc", "check-types"]),
+                           ("test", ["test"]), ("build", ["build"])):
+            name = next((n for n in names if n in scripts), None)
+            if name and not (name == "test" and "no test specified" in scripts[name]):
+                cmds[key] = f"{runner} {name}"
+    elif has("composer.json"):
+        ci, src = "php", src + ["composer.json"]
+        scripts = (json.loads(text("composer.json") or "{}").get("scripts") or {})
+        cmds["install"] = "composer install --no-interaction --prefer-dist --no-progress"
+        for key, names in (("lint", ["lint", "cs", "cs-check"]), ("typecheck", ["phpstan", "psalm", "analyse"]),
+                           ("test", ["test", "tests"])):
+            name = next((n for n in names if n in scripts), None)
+            if name:
+                cmds[key] = f"composer {name}"
+        if "lint" not in cmds and has(".php-cs-fixer.dist.php", ".php-cs-fixer.php"):
+            cmds["lint"] = "vendor/bin/php-cs-fixer fix --dry-run --diff"
+        elif "lint" not in cmds and has("phpcs.xml", "phpcs.xml.dist"):
+            cmds["lint"] = "vendor/bin/phpcs"
+        if "typecheck" not in cmds and has("phpstan.neon", "phpstan.neon.dist", "phpstan.dist.neon"):
+            cmds["typecheck"] = "vendor/bin/phpstan analyse --no-progress"
+        if "test" not in cmds and has("phpunit.xml", "phpunit.xml.dist", "phpunit.dist.xml"):
+            cmds["test"] = "vendor/bin/phpunit"
+    elif has("pyproject.toml", "requirements.txt", "setup.py"):
+        ci, src = "python", src + [n for n in ("pyproject.toml", "requirements.txt", "setup.py") if has(n)]
+        deps = text("pyproject.toml") + text("requirements.txt") + text("requirements-dev.txt")
+        if has("uv.lock"):
+            cmds["install"], run_ = "uv sync", "uv run "
+        elif has("poetry.lock"):
+            cmds["install"], run_ = "poetry install", "poetry run "
+        else:
+            cmds["install"] = "pip install -r requirements.txt" if has("requirements.txt") else "pip install -e ."
+            run_ = ""
+        if "ruff" in deps:
+            cmds["lint"] = f"{run_}ruff check ."
+        if "mypy" in deps:
+            cmds["typecheck"] = f"{run_}mypy ."
+        if "pytest" in deps or has("tests", "pytest.ini", "conftest.py"):
+            cmds["test"] = f"{run_}pytest"
+    elif has("go.mod"):
+        ci, src = "go", src + ["go.mod"]
+        cmds.update(install="go mod download", lint="go vet ./...", test="go test ./...", build="go build ./...")
+    elif has("Cargo.toml"):
+        src.append("Cargo.toml")
+        cmds.update(install="cargo fetch", lint="cargo clippy -- -D warnings", test="cargo test", build="cargo build")
+
+    targets = make_targets(root)  # an explicit Makefile target is the project's intent: it wins
+    for key in COMMAND_KEYS:
+        if key in targets:
+            cmds[key] = f"make {key}"
+    if targets & set(COMMAND_KEYS):
+        src.append("Makefile")
+    return cmds, ci, src
+
+
+def cmd_commands(a):
+    c = cfg()
+    current = c.get("commands") or {}
+    if not a.detect:
+        print(json.dumps(current, indent=2) if current else "no commands configured — `fw commands --detect`")
+        return
+    found, ci, src = detect_commands()
+    print(f"detected from {', '.join(src) or 'nothing'} — CI template: ci-{ci}")
+    for k in COMMAND_KEYS:
+        if k in found or k in current:
+            mark = "=" if current.get(k) == found.get(k) else ("keep" if k in current else "+")
+            print(f"  {mark:<4} {k:<9} {current.get(k) or found[k]}"
+                  + (f"   (detected: {found[k]})" if k in current and k in found and current[k] != found[k] else ""))
+    if a.apply:
+        added = {k: v for k, v in found.items() if k not in current}
+        c["commands"] = {**current, **added}
+        save_json(CONFIG, c)
+        print(f"✔ {len(added)} command(s) added to .fw/config.json → commands (existing ones kept)")
+    else:
+        print("(dry run — `--apply` adds the missing ones; existing commands are never replaced)")
 
 
 # --------------------------------------------------------------------------- drift / changelog / migrations
@@ -2220,9 +2376,23 @@ def main():
 
     s = sub.add_parser("workflow", help="install a GitHub Actions workflow from framework/templates/workflows")
     s.add_argument("action", choices=["list", "install"])
-    s.add_argument("name", nargs="?", help="e.g. cloud-run, docs")
+    s.add_argument("name", nargs="?", help="e.g. ci-node, ci-php, ci-python, ci-go, ci-generic, cloud-run, docs")
     s.add_argument("--force", action="store_true")
+    s.add_argument("--env", action="append", metavar="KEY=VALUE", help="set a variable of the workflow's env block")
     s.set_defaults(fn=cmd_workflow)
+
+    s = sub.add_parser("check", help="run the project's lint / typecheck / test / build commands (the quality gate)")
+    s.add_argument("steps", nargs="*", help=f"only these ({', '.join(COMMAND_KEYS)}); default: every configured "
+                                            f"one of {', '.join(CHECK_STEPS)}")
+    s.add_argument("--if-configured", action="store_true", help="skip steps with no command instead of failing")
+    s.add_argument("--fail-fast", action="store_true")
+    s.add_argument("--json", action="store_true", help="capture output; print results as JSON")
+    s.set_defaults(fn=cmd_check)
+
+    s = sub.add_parser("commands", help="show, or detect from the repository, the project's commands")
+    s.add_argument("--detect", action="store_true")
+    s.add_argument("--apply", action="store_true", help="with --detect: add the missing commands to the config")
+    s.set_defaults(fn=cmd_commands)
 
     s = sub.add_parser("lint-agents", help="check .claude/agents/*.md against the agent quality standard")
     s.set_defaults(fn=cmd_lint_agents)

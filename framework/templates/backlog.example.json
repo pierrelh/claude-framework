@@ -23,7 +23,8 @@
       "description": "Create the project layout, dependency management, a health-check endpoint, the test runner, the linter/static analysis and a CI workflow running them on every pull request.",
       "acceptance_criteria": [
         "The health-check endpoint returns HTTP 200 with the application version",
-        "`make test` and `make lint` run locally and in CI; CI is required on pull requests",
+        "`.fw/config.json → commands` holds the install/lint/test commands and `framework/bin/fw check` passes locally",
+        "The CI workflow (`fw workflow install ci-<stack>`) runs `fw check` on every pull request and is required (`fw protect --checks check`)",
         "CLAUDE.md lists the exact install/run/test/lint commands"
       ],
       "agent_hours": 3, "review_hours": 0.5, "size": "M", "agent": "php-developer"

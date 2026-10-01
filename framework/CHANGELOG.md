@@ -3,6 +3,24 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.6.0 — 2026-10-01
+### Added
+- `.fw/config.json → commands` (`install`, `lint`, `typecheck`, `test`, `build`): one
+  definition of the quality gate. `fw check [steps] [--json] [--fail-fast] [--if-configured]`
+  runs it; implementers and QA finish with it. `fw commands --detect [--apply]` suggests the
+  commands from package.json, composer.json, pyproject.toml, go.mod, Cargo.toml and Makefile.
+  `fw doctor` warns when no `test` command is configured.
+- CI templates `ci-node`, `ci-php`, `ci-python`, `ci-go`, `ci-generic`
+  (`fw workflow install ci-<stack> [--env KEY=VALUE]`): one job named `check` that runs
+  `fw check`, actions pinned to SHAs, read-only token, no persisted credentials. Make it
+  required with `fw protect --checks check`.
+- Optional check gate (`gates.check_on_stop`): a Stop / SubagentStop hook keeps an agent
+  working while `fw check` fails on its changes, without looping.
+- Docs: `docs/framework/quality-gates.md`.
+### Changed
+- `/fw-init` records the commands (detected when adopting), offers the check gate and
+  installs CI; the walking-skeleton example task requires `fw check` and a required CI check.
+
 ## 0.5.0 — 2026-10-01
 ### Added
 - `.fw/framework.lock.json`: hashes of the framework-owned files, written by `fw install` and
