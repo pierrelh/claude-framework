@@ -31,7 +31,9 @@ flowchart TD
 For each ready story: spec check → implementation with tests → code review (up to 3 rounds)
 → QA against every acceptance criterion → docs → pull request → CI → merge → board and
 roadmap updated, actual time recorded. Blocked items get the `needs-human` label with a
-precise question, and the loop moves on.
+precise question, and the loop moves on. Type `stop` during a run (or
+`fw stop` from another terminal) to end it cleanly with a checkpoint per item; `/fw-resume`
+continues it.
 With the **review pipeline** (`fw pipeline on`, either mode) the implementer doesn't wait:
 while reviewers, QA and CI check a story in its own worktree, it starts the next one — at
 most 2 stories in review, rework first, no story that depends on an unmerged one, merges one

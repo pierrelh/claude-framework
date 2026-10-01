@@ -16,6 +16,7 @@ import heapq
 import json
 import math
 import os
+import platform
 import re
 import shutil
 import subprocess
@@ -1416,7 +1417,7 @@ def split_time(events, end):
     """(agent hours, waiting hours) from a timeline: agent time runs from each start to the next
     review / pause; waiting time from a review / pause to the next start, or to the end."""
     agent = wait = 0.0
-    working = waiting = None
+    working = waiting = stopped_from = None
     for event, at in events:
         at = dt.datetime.fromisoformat(at)
         if event == "start":
@@ -1430,6 +1431,18 @@ def split_time(events, end):
                 agent += (at - working).total_seconds()
                 working = None
             if waiting is None:
+                waiting = at
+        elif event == "stop":  # the run was stopped (fw checkpoint): nobody works, nobody waits
+            stopped_from = "working" if working is not None else ("waiting" if waiting is not None else None)
+            if working is not None:
+                agent += (at - working).total_seconds()
+            if waiting is not None:
+                wait += (at - waiting).total_seconds()
+            working = waiting = None
+        elif event == "resume":  # back to whatever the item was doing when it was stopped
+            if stopped_from == "working" and working is None:
+                working = at
+            elif stopped_from == "waiting" and waiting is None:
                 waiting = at
     if working is not None:
         agent += (end - working).total_seconds()
@@ -2403,6 +2416,144 @@ def cmd_rework(a):
     print(f"#{a.issue} → In progress (rework)")
 
 
+# --------------------------------------------------------------------------- stop / checkpoint
+
+STOP_VAR = "FW_STOP"
+
+
+def stop_path(root=None):
+    return (root or ROOT) / ".fw" / "local" / "stop.json"
+
+
+def run_path(root=None):
+    return (root or ROOT) / ".fw" / "local" / "run.json"
+
+
+def checkpoint_path(n, root=None):
+    return (root or ROOT) / ".fw" / "local" / "checkpoints" / f"{n}.json"
+
+
+def headless():
+    return os.environ.get("FW_HEADLESS") == "1" or os.environ.get("CI") == "true"
+
+
+def remote_stop(repo):
+    """The stop request set with `fw stop --remote` (a repository variable), or None."""
+    if not repo:
+        return None
+    p = gh("variable", "get", STOP_VAR, "-R", repo, check=False)
+    if p.returncode != 0 or not p.stdout.strip():
+        return None
+    try:
+        return json.loads(p.stdout)
+    except ValueError:
+        return {"requested_at": None, "mode": "graceful", "reason": p.stdout.strip()}
+
+
+def stop_request(remote=False):
+    local = load_json(stop_path(), None)
+    if local:
+        return dict(local, source="local")
+    if remote:
+        r = remote_stop(dig(cfg(), "github.repo"))
+        if r:
+            return dict(r, source="remote")
+    return None
+
+
+def cmd_stop(a):
+    repo = dig(cfg(), "github.repo")
+    if a.check:
+        req = stop_request(remote=a.remote or headless())
+        if a.json:
+            print(json.dumps({"stop": bool(req), "request": req}, indent=2))
+        else:
+            print(f"stop requested ({req.get('mode')}, {req.get('source')}): {req.get('reason') or 'no reason given'}"
+                  if req else "continue")
+        sys.exit(1 if req else 0)
+    if a.clear:
+        removed = stop_path().exists()
+        stop_path().unlink(missing_ok=True)
+        (run_path()).unlink(missing_ok=True)
+        if a.remote and repo:
+            gh("variable", "delete", STOP_VAR, "-R", repo, check=False)
+        print("✔ stop request cleared" + (" (none was pending)" if not removed and not a.remote else ""))
+        return
+    req = {"requested_at": dt.datetime.now().isoformat(timespec="seconds"), "mode": "now" if a.now else "graceful",
+           "reason": a.reason or ""}
+    save_json(stop_path(), req)
+    if a.remote:
+        if not repo:
+            die("no github.repo in the config for --remote")
+        gh("variable", "set", STOP_VAR, "-R", repo, "--body", json.dumps(req))
+    print(f"✔ stop requested ({req['mode']}{', also on GitHub for cloud runs' if a.remote else ''}).\n"
+          "  The running /fw-work finishes its current step, starts nothing new (the guard blocks new agents,\n"
+          "  `fw start`, `fw rework`, `fw worktree add` and merges), checkpoints every item and ends.\n"
+          "  Resume later with `/fw-work resume`; `fw stop --clear` lifts the request without resuming.")
+
+
+def checkpoint_comment(cp):
+    lines = [marker("checkpoint", cp), f"**⏸ Paused** — resumes at step {cp['step']}: {visible(cp['next'])}"]
+    if cp.get("note"):
+        lines += ["", visible(cp["note"])]
+    where = [f"branch `{cp['branch']}`" if cp.get("branch") else None,
+             "uncommitted work on " + (cp.get("machine") or "the machine that paused it") if cp.get("dirty") else None]
+    if any(where):
+        lines += ["", "_" + "; ".join(w for w in where if w) + "_"]
+    if cp.get("findings"):
+        lines += ["", "<details><summary>Unresolved findings</summary>", "", visible(cp["findings"]), "", "</details>"]
+    lines += ["", f"_Resume with `/fw-work resume` (`fw resume {cp['issue']}`)._"]
+    return "\n".join(lines)
+
+
+def cmd_checkpoint(a):
+    if a.run:
+        save_json(run_path(), {"args": a.args or "", "note": a.note or "",
+                                       "at": dt.datetime.now().isoformat(timespec="seconds")})
+        print("✔ run checkpoint saved (.fw/local/run.json)")
+        return
+    if a.issue is None or a.step is None or not a.next:
+        die("usage: fw checkpoint <n> --step <step> --next '<what to do first on resume>' [--note …]")
+    w = next((w for w in worktree_list() if w["number"] == a.issue), None)
+    findings = Path(a.findings_file).read_text(encoding="utf-8") if a.findings_file else ""
+    cp = {"v": 1, "issue": a.issue, "step": a.step, "next": a.next, "note": a.note or "", "findings": findings,
+          "branch": (w or {}).get("branch") or a.branch, "worktree": (w or {}).get("path"),
+          "dirty": bool(w and w["dirty"]), "machine": platform.node(),
+          "at": dt.datetime.now().isoformat(timespec="seconds")}
+    if not a.local:
+        repo = gh_ctx()["repo"]
+        c = rest("POST", f"repos/{repo}/issues/{a.issue}/comments", {"body": checkpoint_comment(cp)}, check=False)
+        cp["comment_id"] = (c or {}).get("id")
+    save_json(checkpoint_path(a.issue), cp)
+    log_event(a.issue, "stop")
+    print(f"✔ #{a.issue} checkpointed at step {a.step}" + ("" if a.local else " (also on the issue)"))
+
+
+def with_checkpoint(plan, cp):
+    """A saved checkpoint is more precise than what the repository state suggests."""
+    if not cp:
+        return plan
+    plan = dict(plan, checkpoint=cp)
+    if plan.get("step") != 11:  # a merge done while paused still wins: close the loop
+        plan["step"], plan["action"] = cp["step"], f"paused: {cp['next']}"
+    return plan
+
+
+def take_back(n):
+    """`fw resume <n>`: resume the timer, retire the checkpoint (local file and issue comment)."""
+    cp = load_json(checkpoint_path(n), None)
+    if cp is None:
+        die(f"no checkpoint for #{n} on this machine (`fw resume` lists what can be resumed)")
+    log_event(n, "resume")
+    if cp.get("comment_id"):
+        repo = gh_ctx()["repo"]
+        body = (f"**▶ Resumed** {dt.datetime.now():%Y-%m-%d %H:%M} — was paused at step {cp['step']}.\n\n"
+                + marker("checkpoint-resumed", {"issue": n, "at": cp["at"]}))
+        rest("PATCH", f"repos/{repo}/issues/comments/{cp['comment_id']}", {"body": body}, check=False)
+    checkpoint_path(n).unlink()
+    return cp
+
+
 # --------------------------------------------------------------------------- resume / triage / release
 
 BRANCH_RE = r"^(?:feat|fix|chore|hotfix|docs)/{n}-"
@@ -2443,6 +2594,18 @@ def resume_plan(it, branches, prs, current, dirty, mine, ahead):
 
 
 def cmd_resume(a):
+    if a.issue is not None:
+        cp = take_back(a.issue)
+        print(json.dumps(cp, indent=2, ensure_ascii=False) if a.json else
+              f"#{a.issue} taken back — resume at step {cp['step']}: {cp['next']}"
+              + (f"\n{cp['note']}" if cp.get("note") else "")
+              + (f"\nUnresolved findings:\n{cp['findings']}" if cp.get("findings") else ""))
+        return
+    if a.run:
+        r = load_json(run_path(), None)
+        print(json.dumps(r, indent=2) if a.json else (f"/fw-work {r.get('args')} — {r.get('note')}" if r
+                                                      else "no paused run"))
+        return
     ctx = gh_ctx()
     items = [i for i in load_items(ctx) if i["state"] == "OPEN" and i["status"] in ("in progress", "in review")
              and i.get(F_TYPE) != "Epic"]
@@ -2460,11 +2623,22 @@ def cmd_resume(a):
     for b in set(local):
         c = run(["git", "rev-list", "--count", f"{default}..{b}"], check=False).stdout.strip()
         ahead[b] = int(c) if c.isdigit() else 0
-    plans = [resume_plan(i, local + [b for b in remote if b not in local], prs, current, dirty,
-                         str(i["number"]) in mine, ahead) for i in items]
+    wts = {w["number"]: w for w in worktree_list()}
+    plans = []
+    for i in items:
+        w = wts.get(i["number"])
+        cur, drt = (w.get("branch"), w["dirty"]) if w else (current, dirty)
+        plan = resume_plan(i, local + [b for b in remote if b not in local], prs, cur, drt,
+                           str(i["number"]) in mine, ahead)
+        plan["worktree"] = w["path"] if w else None
+        plans.append(with_checkpoint(plan, load_json(checkpoint_path(i["number"]), None)))
     if a.json:
         print(json.dumps(plans, indent=2, ensure_ascii=False))
         return
+    paused_run = load_json(run_path(), None)
+    if paused_run:
+        print(f"Paused run: /fw-work {paused_run.get('args') or ''} (stopped {paused_run.get('at')})"
+              + (f" — {paused_run['note']}" if paused_run.get("note") else "") + " → continue with `/fw-work resume`")
     if not plans:
         print("nothing to resume — no item in progress or in review")
     for r in plans:
@@ -2672,6 +2846,21 @@ def mig_guard_file_hook(root, apply):
     return True
 
 
+def mig_guard_agent_hook(root, apply):
+    """0.10.0: the guard also watches Agent/Task launches (blocked while a stop is pending)."""
+    path = root / ".claude" / "settings.json"
+    s = load_json(path, {})
+    pre = s.get("hooks", {}).get("PreToolUse", [])
+    if any("Agent" in (e.get("matcher") or "") and any("framework/hooks/guard.py" in (h.get("command") or "")
+                                                       for h in e.get("hooks", [])) for e in pre):
+        return False
+    if apply:
+        s.setdefault("hooks", {}).setdefault("PreToolUse", []).append(
+            {"matcher": "Agent|Task", "hooks": [{"type": "command", "command": GUARD_CMD}]})
+        save_json(path, s)
+    return True
+
+
 def mig_lock(root, apply):
     """Projects updated by an fw older than 0.5.0 have no baseline for `fw drift`."""
     if lock_path(root).exists():
@@ -2685,6 +2874,7 @@ def mig_lock(root, apply):
 MIGRATIONS = [
     ("0.4.0", "guard hook on Edit / Write / MultiEdit / NotebookEdit in .claude/settings.json", mig_guard_file_hook),
     ("0.5.0", "baseline of the framework-owned files (.fw/framework.lock.json)", mig_lock),
+    ("0.10.0", "guard hook on Agent / Task launches in .claude/settings.json (fw stop)", mig_guard_agent_hook),
 ]
 
 
@@ -2807,9 +2997,34 @@ def main():
     s.add_argument("issue", type=int)
     s.set_defaults(fn=cmd_rework)
 
-    s = sub.add_parser("resume", help="interrupted items (in progress / in review) and where /fw-work picks them up")
+    s = sub.add_parser("resume", help="interrupted or paused items and where /fw-work picks them up; "
+                                      "`fw resume <n>` takes a paused item back")
+    s.add_argument("issue", type=int, nargs="?")
+    s.add_argument("--run", action="store_true", help="the paused /fw-work run (arguments, note)")
     s.add_argument("--json", action="store_true")
     s.set_defaults(fn=cmd_resume)
+
+    s = sub.add_parser("stop", help="ask the running /fw-work to stop at the next step and checkpoint its work")
+    s.add_argument("--now", action="store_true", help="don't wait for background reviews (re-run them on resume)")
+    s.add_argument("--remote", action="store_true", help="also set the FW_STOP repository variable (cloud runs, "
+                                                         "other machines); with --check/--clear: read/delete it")
+    s.add_argument("--reason")
+    s.add_argument("--check", action="store_true", help="exit 1 when a stop is requested, 0 to continue")
+    s.add_argument("--clear", action="store_true", help="lift the stop request (and forget the paused run)")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_stop)
+
+    s = sub.add_parser("checkpoint", help="save where an item stands before stopping (local + issue comment)")
+    s.add_argument("issue", type=int, nargs="?")
+    s.add_argument("--step", type=int, help="the /fw-work step to resume at")
+    s.add_argument("--next", help="the first thing to do on resume, precisely")
+    s.add_argument("--note", help="context: decisions taken, what was tried, state of background agents")
+    s.add_argument("--findings-file", help="file with the review findings not yet addressed")
+    s.add_argument("--branch", help="branch when the item has no worktree")
+    s.add_argument("--local", action="store_true", help="don't post the checkpoint on the issue")
+    s.add_argument("--run", action="store_true", help="save the run instead: its /fw-work arguments")
+    s.add_argument("--args", help="with --run: the arguments to continue with (e.g. 'all', '2')")
+    s.set_defaults(fn=cmd_checkpoint)
 
     s = sub.add_parser("untriaged", help="open issues not on the board, labelled triage, or without type/estimate")
     s.add_argument("--json", action="store_true")

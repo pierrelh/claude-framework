@@ -36,6 +36,31 @@ Switch any time: `framework/bin/fw autonomy assisted|auto` (then restart Claude 
   the run.
 - **Everything is a pull request**: any merged change can be reverted from GitHub.
 
+## Stopping a run
+`/fw-work all` runs until nothing is ready. Three ways to stop it — pick by how fast you
+need it to stop:
+
+| You do | When it stops | What is lost |
+|---|---|---|
+| Type **`stop`** (plain text, no slash) and press Enter while it works | after the step running now (e.g. when the current agent returns) | nothing |
+| Run **`framework/bin/fw stop`** in another terminal (`--remote` for a cloud run) | at the run's next check, between two steps | nothing |
+| Press **Esc**, then type **`/fw-stop`** | immediately | the interrupted step is redone on resume |
+
+Why not `/fw-stop` while it works? Claude Code queues messages typed during a run and hands
+plain text to Claude between two tool calls — but a queued **slash command** only runs once
+the whole turn is over, i.e. after `/fw-work all` has finished everything.
+
+In every case the run finishes (or abandons, with Esc) its current step, starts nothing new
+— while a stop is pending the guard refuses new agents, new items, rework and merges —,
+writes a **checkpoint** per item (the step to resume at, the next action, the context and
+the unresolved review findings; locally and as a "⏸ Paused" comment on the issue), saves the
+run's arguments, and ends. `fw stop --now` doesn't wait for reviews running in the
+background (they are re-run on resume). Stopped time counts neither as agent time nor as
+waiting time.
+
+**Later: `/fw-resume`** continues exactly there (`fw resume` shows what is paused);
+`framework/bin/fw stop --clear` lifts a stop without resuming.
+
 ## Risks you accept in auto mode
 Without permission prompts, Claude Code can run any other command on this machine and
 reach the network without asking. Use auto mode on a machine/account where that is

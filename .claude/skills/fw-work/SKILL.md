@@ -1,7 +1,7 @@
 ---
 name: fw-work
 description: Implement backlog items end to end with the project's agent team — pick the next ready story, branch, spec check, implementation, tests, code review, QA against acceptance criteria, docs, pull request, merge, board and roadmap update. Chains stories autonomously in auto mode. Use to make progress on the project.
-argument-hint: "[#issue | all | N (number of stories)] — default: the next ready story"
+argument-hint: "[#issue | all | N (number of stories) | resume] — default: the next ready story"
 ---
 
 # /fw-work — deliver stories
@@ -11,7 +11,9 @@ in `.fw/config.json → roles` and keep the board truthful. Read `CLAUDE.md`,
 `framework/standards/git-workflow.md` and the config (`autonomy`, `roles`, languages) first.
 
 Argument: `$ARGUMENTS` — `#12` (that item), `all` (until nothing is ready), `3` (three
-items), empty (one item).
+items), empty (one item), `resume` (continue a run stopped with `fw stop`, see *Stopping*).
+A new run starts with `framework/bin/fw stop --clear` — except `resume`, which reads the
+paused run first (`fw resume --run --json`) and then clears it.
 
 ## Calling an agent
 Use the Agent tool with `subagent_type: <agent name>`. If that agent type is not available
@@ -156,6 +158,40 @@ The loop above still applies to each item; what changes is the scheduling:
 Only for ready items with no dependency between them and no overlapping files. Run each
 implementer with `isolation: "worktree"`, one branch/PR per item; review, QA and merge stay
 sequential; rebase the later branches after each merge.
+
+## Stopping — "stop" typed during the run, `fw stop`, or Esc then `/fw-stop`
+The user can stop a run at any time: by writing "stop" / "pause" while it works (Claude Code
+delivers a plain-text message between two tool calls — treat it as `/fw-stop`), with
+`framework/bin/fw stop` from another terminal (`--now`: don't wait for background reviews;
+`--remote`: also for cloud runs and other machines), or with Esc then `/fw-stop`. Check `framework/bin/fw stop --check` (exit 1 = stop requested;
+cheap, local — headless runs also look at the repository variable) **before picking an item,
+after every agent returns, and before every merge**. While a stop is pending the guard refuses
+new agents, `fw start`, `fw rework`, `fw worktree add` and `gh pr merge` — that is expected.
+When a stop is requested:
+1. Let the agent that is running finish its step; start nothing new. Graceful mode: wait for
+   the background reviewers / QA and keep their results; `now` mode: don't wait — note them
+   as "review running, re-run on resume".
+2. Leave every working tree as it is: never stash, reset or commit half-done work to stop.
+3. Checkpoint **every** item in flight, from the main checkout:
+   `framework/bin/fw checkpoint <n> --step <step to resume at> --next "<the first concrete
+   action on resume>" --note "<decisions taken, what was tried, review round, state of
+   background agents>" [--findings-file <file with the unresolved findings, verbatim>]`.
+   The note must let a fresh session continue without guessing — agents remember nothing.
+   Items already merged need no checkpoint: run step 11 for them before stopping if
+   `gh pr merge` already happened.
+4. Checkpoint the run: `framework/bin/fw checkpoint --run --args "<what is left: all, or the
+   remaining N>" --note "<pipeline state, escalation streak>"`.
+5. Report what is paused and where, then end. Don't clear the stop request yourself.
+
+## Resuming — `/fw-work resume`
+1. `framework/bin/fw resume --run --json` (the paused run's arguments) and
+   `framework/bin/fw resume --json` (every in-flight item; paused ones carry `checkpoint`).
+2. `framework/bin/fw stop --clear`.
+3. For each item with a checkpoint started on this machine: `framework/bin/fw resume <n>`
+   (takes it back: timer resumed, checkpoint retired) and continue at its `step`, giving the
+   agents its `next`, `note` and `findings`. Items paused on another machine with
+   uncommitted work stay there — report them.
+4. Continue the run with the saved arguments (`all`, or the remaining count).
 
 ## Report (end of run)
 Per item: #, title, result (merged / PR open / escalated — why), estimate vs actual. Then

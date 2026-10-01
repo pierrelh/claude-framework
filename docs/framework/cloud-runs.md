@@ -20,6 +20,10 @@ computer: useful when your machine is off, or to let a tool or app start work re
   (`#12`, `all`, `3`, or the need for `fw-backlog`).
 - CLI: `gh workflow run fw-cloud-run.yml -f command=fw-work -f args="#12"`.
 One run at a time per repository (later dispatches wait in the queue).
+To stop a cloud run cleanly: `framework/bin/fw stop --remote` (sets the `FW_STOP` repository
+variable; the run checkpoints its items and ends — see [autonomy](autonomy.md#stopping-a-run)),
+then `framework/bin/fw stop --clear --remote` before the next run (`/fw-resume` continues it). Cancelling the workflow on
+GitHub stops it immediately, without checkpoints.
 
 ## When an agent has a question
 A cloud run can't wait for you, so it posts the question on the issue (a comment marked

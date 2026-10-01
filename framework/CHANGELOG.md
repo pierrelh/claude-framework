@@ -3,6 +3,27 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.10.0 — 2026-10-01
+### Added
+- `fw stop [--now] [--remote] [--reason]`: ask a running `/fw-work` to stop cleanly;
+  `--check` (exit 1 = stop requested; headless runs also read the `FW_STOP` repository
+  variable set by `--remote`), `--clear`. While a stop is pending the guard refuses new
+  agents (Agent / Task), `fw start`, `fw rework`, `fw worktree add` and `gh pr merge`.
+- `fw checkpoint <n> --step --next [--note] [--findings-file] [--local]`: where an item
+  stands — saved in `.fw/local/checkpoints/` and as a "⏸ Paused" comment on the issue
+  (marker `fw:checkpoint`, user text neutralised); `fw checkpoint --run --args` saves the
+  run. Stopped time counts neither as agent nor as waiting time (timeline events
+  `stop` / `resume`).
+- `fw resume <n>` takes a paused item back (timer resumed, comment turned into "▶ Resumed");
+  `fw resume` shows checkpoints and the story worktrees; `fw resume --run` the paused run.
+  `/fw-work resume` continues the run; `/fw-work` → *Stopping* / *Resuming*.
+- `/fw-stop [now] [remote]` and `/fw-resume` skills. Mid-run, type `stop` as plain text
+  (Claude Code hands it over between two tool calls; a queued slash command would only run
+  after the whole run); Esc then `/fw-stop` stops immediately. Framework rule 7.
+### Upgrading from an older version
+- `framework/bin/fw migrate` adds the guard hook on Agent / Task launches to
+  `.claude/settings.json` (migration 0.10.0).
+
 ## 0.9.0 — 2026-10-01
 ### Added
 - Review pipeline (`pipeline.enabled`, both autonomy modes; `fw pipeline on|off [--wip N]`):

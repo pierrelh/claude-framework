@@ -257,11 +257,11 @@ class Migrate(unittest.TestCase):
 
     def test_apply_once(self):
         self.migrate()
-        self.assertEqual(self.matchers(), ["Bash", "Edit|Write|MultiEdit|NotebookEdit"])
+        self.assertEqual(self.matchers(), ["Bash", "Edit|Write|MultiEdit|NotebookEdit", "Agent|Task"])
         version = (self.root / "framework" / "VERSION").read_text().strip()
         self.assertEqual(json.loads(self.config.read_text())["framework"]["migrated"], version)
         self.assertIn("no migration pending", self.migrate())
-        self.assertEqual(len(self.matchers()), 2)
+        self.assertEqual(len(self.matchers()), 3)
 
     def test_missing_marker_runs_everything_idempotently(self):
         conf = json.loads(self.config.read_text())
