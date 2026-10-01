@@ -31,7 +31,11 @@ requests and keep this documentation up to date.
 | `.fw/` | project | Config, backlog batches, key → issue mapping |
 | `CLAUDE.md`, `docs/` | project | Knowledge for agents and humans |
 
-Template-owned files are replaced by `/fw-update`; don't edit them in a project.
+Template-owned files are replaced by `/fw-update`; don't edit them in a project (the guard
+blocks it once the project is initialized). `.fw/framework.lock.json` records their hashes as
+installed: `fw drift` lists local edits, and `/fw-update` warns before overwriting them. After
+an update, `fw migrate` (run automatically) adapts the project's config and settings to the
+new version.
 
 ## The `fw` CLI
 Skills call `framework/bin/fw` for everything touching the GitHub project, so behaviour is

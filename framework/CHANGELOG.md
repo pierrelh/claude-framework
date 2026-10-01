@@ -3,6 +3,25 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.5.0 — 2026-10-01
+### Added
+- `.fw/framework.lock.json`: hashes of the framework-owned files, written by `fw install` and
+  `fw update --apply` (commit it). `fw drift [--json]` lists files modified, added or deleted
+  locally since then; `fw doctor` reports it (`framework-drift`).
+- `fw update` previews the CHANGELOG entries between the installed and the upstream version,
+  and warns about the local changes `--apply` would overwrite.
+- `fw migrate [--dry-run]`: versioned, idempotent migrations of the project's config and
+  settings, tracked in `framework.migrated`. `fw update --apply` runs them with the *new*
+  code. First migration (0.4.0): add the Edit/Write guard hook that older `fw` versions
+  failed to merge into `.claude/settings.json`.
+### Fixed
+- `fw protect --repo <other>` no longer writes that repository's protection into the
+  local config.
+### Upgrading from an older version
+- The `fw` doing the update is still the old one: after `fw update --apply`, run
+  `framework/bin/fw migrate` once — it adds the missing Edit/Write guard hook and creates the
+  baseline lock. Later updates run it automatically.
+
 ## 0.4.0 — 2026-10-01
 ### Added
 - `fw protect`: GitHub ruleset on the default branch — pull request required, no force push,

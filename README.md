@@ -84,7 +84,14 @@ docs/                     human docs (Obsidian vault / MkDocs site)
   (stdlib only, no network — GitHub calls are mocked, install/update run on throwaway git repos).
   CI runs them on every pull request (`.github/workflows/framework-tests.yml`, template-only:
   not copied into projects). A new `fw` command or guard rule comes with its tests.
-- Bump `framework/VERSION` on each change to framework-owned files (`framework/MANIFEST`).
+- Bump `framework/VERSION` on each change to framework-owned files (`framework/MANIFEST`) and
+  add a `framework/CHANGELOG.md` entry — `fw update` shows projects the entries between their
+  version and yours.
+- Changing the format of `.fw/config.json`, `.fw/state.json` or `.claude/settings.json`?
+  Add an idempotent function to `MIGRATIONS` in `fw.py` (version = the release introducing
+  it) with tests: `fw update --apply` runs pending migrations with the new code.
+- **The `main` branch is protected** (ruleset from `fw protect`): every change goes through a
+  pull request with green `test (3.8)` / `test (3.12)` checks.
 - Optional: set `framework.template_project` in `.fw/config.json` to a GitHub project
   (`owner/number`) that already has Kanban and Roadmap views — new projects are then copied
   from it, views included.

@@ -11,6 +11,7 @@ Run `fw <command> -h` for the options of each command.
 import argparse
 import datetime as dt
 import fnmatch
+import hashlib
 import heapq
 import json
 import math
@@ -488,6 +489,12 @@ def cmd_doctor(a):
     repo["project_files"] = len(code)
     repo["project_files_sample"] = code[:15]
 
+    d = drift()
+    if d is not None:
+        changed = [f for k in ("modified", "added", "deleted") for f in d[k]]
+        add("framework-drift", not changed, f"{len(changed)} framework-owned file(s) changed locally: "
+            + ", ".join(changed[:5]) if changed else "framework-owned files match the installed version",
+            "framework/bin/fw drift — move the change to the template, or restore with /fw-update", required=False)
     gh_repo = dig(cfg(), "github.repo")
     if repo["initialized"] and gh_repo and login:
         readable, ruleset = find_ruleset(gh_repo)
@@ -741,7 +748,7 @@ def cmd_protect(a):
         print(f"✔ {repo}: default branch protected (ruleset #{current['id']})" if current
               else f"✘ {repo}: default branch not protected — run `framework/bin/fw protect`")
         sys.exit(0 if current else 1)
-    prot = dig(c, "github.protection", {}) or {}
+    prot = (dig(c, "github.protection", {}) or {}) if repo == dig(c, "github.repo") else {}
     checks = prot.get("checks", []) if a.checks is None else [x.strip() for x in a.checks.split(",") if x.strip()]
     approvals = prot.get("approvals", 0) if a.approvals is None else a.approvals
     body = protection_ruleset(checks, approvals)
@@ -759,8 +766,9 @@ def cmd_protect(a):
                   "  The local guard hook still blocks direct pushes to main, but nothing enforces it on GitHub.\n"
                   "  Options: GitHub Pro/Team, a public repository, or accept the risk.")
         sys.exit(4)
-    c.setdefault("github", {})["protection"] = {"ruleset_id": res.get("id"), "checks": checks, "approvals": approvals}
-    save_json(CONFIG, c)
+    if repo == dig(c, "github.repo"):  # `--repo` on another repository leaves this config alone
+        c["github"]["protection"] = {"ruleset_id": res.get("id"), "checks": checks, "approvals": approvals}
+        save_json(CONFIG, c)
     print(f"✔ {repo}: default branch protected — pull request required ({approvals} approval(s)), "
           f"no force push, no deletion, no bypass"
           + (f", required checks: {', '.join(checks)}" if checks else ", no required checks yet"))
@@ -1820,7 +1828,7 @@ def cmd_docs_check(a):
 
 # --------------------------------------------------------------------------- install / update
 
-INSTALL_EXCLUDE = (".git/", ".fw/local/", ".fw/state.json", ".fw/backlog/", ".claude/settings.local.json", "site/")
+INSTALL_EXCLUDE = (".git/", ".fw/local/", ".fw/state.json", ".fw/backlog/", ".fw/framework.lock.json", ".claude/settings.local.json", "site/")
 
 
 def source_files(src):
@@ -1889,7 +1897,9 @@ def cmd_install(a):
     conf.setdefault("framework", {}).update(upstream=upstream or dig(cfg(), "framework.upstream", ""),
                                              branch="main",
                                              version=(ROOT / "framework" / "VERSION").read_text().strip())
+    conf["framework"]["migrated"] = conf["framework"]["version"]
     save_json(dst / ".fw" / "config.json", conf)
+    write_lock(dst, conf["framework"]["version"])
     gi = dst / ".gitignore"
     lines = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
     extra = [x for x in GITIGNORE_LINES if x not in lines]
@@ -1919,10 +1929,20 @@ def cmd_update(a):
     cur = (ROOT / "framework" / "VERSION").read_text().strip()
     new = run(["git", "show", "FETCH_HEAD:framework/VERSION"], check=False).stdout.strip() or "?"
     print(f"framework {cur} → {new} ({url} {branch})")
+    notes = changelog_between(run(["git", "show", "FETCH_HEAD:framework/CHANGELOG.md"], check=False).stdout, cur, new)
+    if notes:
+        print("\n" + notes + "\n")
     print(run(["git", "diff", "--stat", "HEAD", "FETCH_HEAD", "--", *owned], check=False).stdout.strip()
           or "no difference in framework-owned files")
     if removed:
         print("removed upstream: " + ", ".join(removed))
+    d = drift()
+    if d and any(d.values()):
+        print("\n! local changes to framework-owned files — --apply replaces them with the upstream version; "
+              "move anything worth keeping to the template first:")
+        for kind in ("modified", "added", "deleted"):
+            for f in d[kind]:
+                print(f"  {kind:<8} {f}")
     if not a.apply:
         print("\n(dry run — re-run with --apply)")
         return
@@ -1935,7 +1955,134 @@ def cmd_update(a):
         merge_settings(json.loads(up_settings), ROOT / ".claude" / "settings.json")
     c.setdefault("framework", {})["version"] = new
     save_json(CONFIG, c)
+    write_lock(ROOT, new)
+    # migrations live in the new code: run it, not this (old) process
+    m = run([sys.executable, str(ROOT / "framework" / "bin" / "fw.py"), "migrate"], check=False)
+    print((m.stdout + m.stderr).strip())
+    if m.returncode != 0:
+        die("migrations failed — fix the error above, then re-run `framework/bin/fw migrate`")
     print("\n✔ framework files updated — review `git diff --staged`, run `fw lint-agents`, then commit.")
+
+
+# --------------------------------------------------------------------------- drift / changelog / migrations
+
+def lock_path(root=None):
+    return (root or ROOT) / ".fw" / "framework.lock.json"
+
+
+def file_hash(path):
+    return hashlib.sha256(Path(path).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+
+
+def owned_files(root=None):
+    root = root or ROOT
+    owned, _ = manifest(root)
+    return sorted(f for f in repo_files(root) if matches(f, owned) and "__pycache__" not in f
+                  and (root / f).is_file())
+
+
+def write_lock(root, version):
+    """Baseline of the framework-owned files as installed/updated, to detect local edits later."""
+    save_json(lock_path(root), {"version": version,
+                                "files": {f: file_hash(root / f) for f in owned_files(root)}})
+
+
+def drift(root=None):
+    """{'modified', 'added', 'deleted'} framework-owned files since the last install/update, or None."""
+    root = root or ROOT
+    lock = load_json(lock_path(root), None)
+    if lock is None:
+        return None
+    base, cur = lock.get("files", {}), {f: file_hash(root / f) for f in owned_files(root)}
+    return {"modified": sorted(f for f in base if f in cur and cur[f] != base[f]),
+            "added": sorted(f for f in cur if f not in base),
+            "deleted": sorted(f for f in base if f not in cur)}
+
+
+def cmd_drift(a):
+    d = drift()
+    if a.json:
+        print(json.dumps(d, indent=2))
+    elif d is None:
+        print("no baseline (.fw/framework.lock.json) — it is written by `fw install` and `fw update --apply`")
+    elif not any(d.values()):
+        print("✔ framework-owned files match the installed version")
+    else:
+        for kind in ("modified", "added", "deleted"):
+            for f in d[kind]:
+                print(f"{kind:<8} {f}")
+        print("\nFramework-owned files are replaced by /fw-update: move these changes to the upstream template, "
+              "or put project-specific behaviour in CLAUDE.md, .claude/agents/ or docs/.")
+    sys.exit(1 if d and any(d.values()) else 0)
+
+
+def vtuple(v):
+    return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3]) or (0,)
+
+
+def changelog_between(text, old, new):
+    """The CHANGELOG sections with old < version <= new, newest first, as written."""
+    out, keep = [], False
+    for line in (text or "").splitlines():
+        m = re.match(r"^## \[?(\d+(?:\.\d+)*)", line)
+        if m:
+            keep = vtuple(old) < vtuple(m.group(1)) <= vtuple(new)
+        elif line.startswith("## "):
+            keep = False
+        if keep:
+            out.append(line)
+    return "\n".join(out).strip()
+
+
+GUARD_CMD = 'python3 "$CLAUDE_PROJECT_DIR/framework/hooks/guard.py"'
+
+
+def mig_guard_file_hook(root, apply):
+    """Projects updated to 0.4.0 by an older fw (hooks merged by command only) lack the Edit/Write guard."""
+    path = root / ".claude" / "settings.json"
+    s = load_json(path, {})
+    pre = s.get("hooks", {}).get("PreToolUse", [])
+    if any("Edit" in (e.get("matcher") or "") and any("framework/hooks/guard.py" in (h.get("command") or "")
+                                                      for h in e.get("hooks", [])) for e in pre):
+        return False
+    if apply:
+        s.setdefault("hooks", {}).setdefault("PreToolUse", []).append(
+            {"matcher": "Edit|Write|MultiEdit|NotebookEdit", "hooks": [{"type": "command", "command": GUARD_CMD}]})
+        save_json(path, s)
+    return True
+
+
+def mig_lock(root, apply):
+    """Projects updated by an fw older than 0.5.0 have no baseline for `fw drift`."""
+    if lock_path(root).exists():
+        return False
+    if apply:
+        write_lock(root, (root / "framework" / "VERSION").read_text().strip())
+    return True
+
+
+# (version, description, fn(root, apply) -> changed?). Append only; every function must be idempotent.
+MIGRATIONS = [
+    ("0.4.0", "guard hook on Edit / Write / MultiEdit / NotebookEdit in .claude/settings.json", mig_guard_file_hook),
+    ("0.5.0", "baseline of the framework-owned files (.fw/framework.lock.json)", mig_lock),
+]
+
+
+def cmd_migrate(a):
+    c = cfg()
+    done = dig(c, "framework.migrated") or "0"
+    pending = [m for m in MIGRATIONS if vtuple(m[0]) > vtuple(done)]
+    for version, desc, fn in pending:
+        changed = fn(ROOT, not a.dry_run)
+        print(f"{'✔' if changed and not a.dry_run else ('→' if changed else '·')} {version}: {desc}"
+              + ("" if changed else " (already in place)"))
+    if not pending:
+        print(f"no migration pending (migrated up to {done})")
+    if not a.dry_run:
+        current = (ROOT / "framework" / "VERSION").read_text().strip()
+        if c.get("framework", {}).get("migrated") != current:
+            c.setdefault("framework", {})["migrated"] = current
+            save_json(CONFIG, c)
 
 
 # --------------------------------------------------------------------------- CLI
@@ -2086,6 +2233,14 @@ def main():
     s = sub.add_parser("install", help="install the framework into an existing project directory")
     s.add_argument("target")
     s.set_defaults(fn=cmd_install)
+
+    s = sub.add_parser("drift", help="framework-owned files changed locally since the last install/update")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_drift)
+
+    s = sub.add_parser("migrate", help="run the pending config/settings migrations (fw update --apply does it)")
+    s.add_argument("--dry-run", action="store_true")
+    s.set_defaults(fn=cmd_migrate)
 
     s = sub.add_parser("update", help="pull framework-owned files from the upstream template")
     s.add_argument("--apply", action="store_true")
