@@ -3,6 +3,7 @@ import argparse
 import datetime as dt
 import io
 import json
+import os
 import unittest
 from unittest import mock
 
@@ -77,7 +78,10 @@ class Stop(ProjectCase):
     def test_remote(self):
         self.stop(remote=True)
         fw.stop_path().unlink()
-        self.assertEqual(self.stop(check=True)[0], 0)              # interactive: local only
+        with mock.patch.dict("os.environ"):  # an interactive session (CI sets CI=true, i.e. headless)
+            os.environ.pop("CI", None)
+            os.environ.pop("FW_HEADLESS", None)
+            self.assertEqual(self.stop(check=True)[0], 0)          # interactive: local only
         self.assertEqual(self.stop(check=True, remote=True)[0], 1)
         with mock.patch.dict("os.environ", {"FW_HEADLESS": "1"}):
             self.assertEqual(self.stop(check=True)[0], 1)          # cloud runs always look remotely
