@@ -17,6 +17,9 @@ requests and keep this documentation up to date.
 | Add a feature or report a bug | `/fw-backlog <your words>` |
 | Re-estimate or re-plan | `/fw-plan` |
 | Change the agent team | `/fw-team` |
+| Sort incoming issues from users or teammates | `/fw-triage` |
+| Ship a version | `/fw-release` |
+| Fix something urgent | label the bug `hotfix` (or ask `/fw-triage`), then `/fw-work` |
 | Learn from a finished milestone | `/fw-retro` |
 | Refresh the docs | `/fw-docs` |
 | Check your machine / GitHub access | `/fw-doctor` |

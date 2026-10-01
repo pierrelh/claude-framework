@@ -1,7 +1,11 @@
 # Standard — git and pull requests
 
 - **One backlog item = one branch = one pull request.** Branch from an up-to-date default branch.
-- Branch names: `feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `chore/<issue>-<slug>`, `docs/<slug>`.
+- Branch names: `feat/<issue>-<slug>`, `fix/<issue>-<slug>`, `chore/<issue>-<slug>`,
+  `hotfix/<issue>-<slug>`, `docs/<slug>`; releases `chore/release-<version>`.
+- Releases: `/fw-release` — `CHANGELOG.md` and version bump through a PR, then an annotated
+  tag `v<version>` on the merged commit and a GitHub release. Tags are never moved or
+  deleted once pushed.
 - Commits: [Conventional Commits](https://www.conventionalcommits.org/) in English —
   `feat(auth): add password reset (#12)`. Small, meaningful commits; no "wip".
 - PR title = issue title; PR body follows `.github/pull_request_template.md` and contains
