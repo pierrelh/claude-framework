@@ -75,10 +75,15 @@ framework/bin/fw          CLI: doctor, github-setup, backlog, schedule, next, do
 framework/hooks/          session context + safety guard
 framework/standards/      user stories, estimation, agents, docs, git
 framework/templates/      brief, agent, ADR, backlog example, docs workflow
+framework/tests/          unittest suite for fw.py and the hooks (stdlib only)
 docs/                     human docs (Obsidian vault / MkDocs site)
 ```
 
 ## Maintaining the template
+- Run the tests before every change: `python3 -m unittest discover -s framework/tests`
+  (stdlib only, no network — GitHub calls are mocked, install/update run on throwaway git repos).
+  CI runs them on every pull request (`.github/workflows/framework-tests.yml`, template-only:
+  not copied into projects). A new `fw` command or guard rule comes with its tests.
 - Bump `framework/VERSION` on each change to framework-owned files (`framework/MANIFEST`).
 - Optional: set `framework.template_project` in `.fw/config.json` to a GitHub project
   (`owner/number`) that already has Kanban and Roadmap views — new projects are then copied

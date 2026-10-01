@@ -1,0 +1,24 @@
+# Tests of the framework itself. Template-only: not listed in framework/MANIFEST, so never
+# copied into projects.
+name: framework-tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        python: ["3.8", "3.12"]   # 3.8 = the minimum `fw doctor` accepts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        run: python3 -m unittest discover -s framework/tests -v
+      - name: Docs links
+        run: python3 framework/bin/fw.py docs-check

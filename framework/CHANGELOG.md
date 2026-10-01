@@ -3,6 +3,18 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.3.1 — 2026-10-01
+### Added
+- Test suite extended to backlog validation, the `fw done` cascade, `install` / `update` on
+  throwaway git repos, `lint-agents`, `docs-check`, the SessionStart hook and the guard
+  (`framework/tests/test_*.py`, shared `helpers.py`). Known guard holes are recorded as an
+  expected failure.
+- Template CI: `.github/workflows/framework-tests.yml` (Python 3.8 and 3.12). Template-only,
+  never copied into projects.
+### Changed
+- `manifest()` / `repo_files()` resolve the project root at call time (testability; no
+  behaviour change).
+
 ## 0.3.0 — 2026-09-29
 ### Added
 - Structured escalations (`framework/standards/escalation.md`): `fw escalate`, `fw answer`,

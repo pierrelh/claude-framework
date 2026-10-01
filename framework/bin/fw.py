@@ -274,9 +274,9 @@ def canon_status(name):
     return {"todo": "ready", "to do": "ready", "doing": "in progress", "review": "in review"}.get(n, n or "backlog")
 
 
-def manifest(src_root=ROOT):
+def manifest(src_root=None):
     owned, scaffold = [], []
-    for line in (src_root / "framework" / "MANIFEST").read_text(encoding="utf-8").splitlines():
+    for line in ((src_root or ROOT) / "framework" / "MANIFEST").read_text(encoding="utf-8").splitlines():
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -289,7 +289,8 @@ def matches(path, patterns):
     return any(fnmatch.fnmatch(path, p) for p in patterns)
 
 
-def repo_files(root=ROOT):
+def repo_files(root=None):
+    root = root or ROOT
     p = run(["git", "ls-files", "--cached", "--others", "--exclude-standard"], check=False, cwd=root)
     if p.returncode == 0:
         return [line for line in p.stdout.splitlines() if line]
