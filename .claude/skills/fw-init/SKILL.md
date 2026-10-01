@@ -138,9 +138,16 @@ Follow `.claude/skills/fw-plan/SKILL.md` (capacity questions, estimate discussio
 4. `framework/bin/fw docs-check` and `framework/bin/fw lint-agents` must pass.
 5. `fw config set name "<project name>"`, then `fw config set initialized true`,
    `fw config set init_phase done`.
-6. Commit on `main`: `chore: initialize project with AI framework`; push with
-   `FW_ALLOW_MAIN_PUSH=1 git push -u origin main` (the only direct push to main allowed).
+6. Commit `chore: initialize project with AI framework`, then push:
+   - **New project** (the remote has no `main` yet): `git push -u origin main`. The guard
+     allows a direct push to main only in that case — it checks the remote, not the command.
+   - **Adopt** (the remote already has `main`): commit on `chore/fw-init` instead, push it,
+     `gh pr create`, and merge once the user agrees (or they merge on GitHub).
    New agents in `.claude/agents/` are loaded at the next start of Claude Code.
+7. Protect the default branch: `framework/bin/fw protect` (GitHub ruleset: pull request
+   required, no force push, no deletion, no bypass). Exit code 4 = the plan does not allow it
+   (private repository on GitHub Free): explain the options it prints and continue — the local
+   guard still applies. Required CI checks are added later with `fw protect --checks <names>`.
 
 ## Phase 12 — Hand-over
 Summarise in the user's language: repo URL, board URL, number of epics/stories, total hours,

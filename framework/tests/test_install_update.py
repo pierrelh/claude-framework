@@ -62,13 +62,27 @@ class Install(unittest.TestCase):
             install(d)
             self.assertEqual((d / "CLAUDE.md").read_text().count("@framework/CLAUDE.framework.md"), 1)
             settings = json.loads((d / ".claude" / "settings.json").read_text())
-            self.assertEqual(len(settings["hooks"]["PreToolUse"]), 1)
+            shipped = json.loads((TEMPLATE_ROOT / ".claude" / "settings.json").read_text())
+            self.assertEqual(len(settings["hooks"]["PreToolUse"]), len(shipped["hooks"]["PreToolUse"]))
             self.assertEqual(len(settings["permissions"]["allow"]), len(set(settings["permissions"]["allow"])))
             self.assertEqual((d / ".gitignore").read_text().count("# framework"), 1)
 
     def test_refuses_to_install_into_itself(self):
         with self.assertRaises(SystemExit), mock.patch("sys.stderr"):
             install(TEMPLATE_ROOT)
+
+
+class MergeSettings(unittest.TestCase):
+    def test_same_command_under_a_new_matcher_is_added(self):
+        guard = {"type": "command", "command": "python3 guard.py"}
+        with TempDir() as d:
+            write_json(d / "settings.json", {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [guard]}]}})
+            src = {"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [guard]},
+                                            {"matcher": "Edit|Write", "hooks": [guard]}]}}
+            fw.merge_settings(src, d / "settings.json")
+            fw.merge_settings(src, d / "settings.json")
+            merged = json.loads((d / "settings.json").read_text())["hooks"]["PreToolUse"]
+            self.assertEqual([e["matcher"] for e in merged], ["Bash", "Edit|Write"])
 
 
 class Update(unittest.TestCase):
