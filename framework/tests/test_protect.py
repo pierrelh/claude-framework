@@ -78,6 +78,13 @@ class Protect(unittest.TestCase):
         self.assertIn("GitHub Free", self.output)
         self.assertNotIn("protection", json.loads(self.config.read_text())["github"])
 
+    def test_other_repository_leaves_the_config_alone(self):
+        write_json(self.config, {"github": {"repo": "o/r", "protection": {"checks": ["ci"], "approvals": 1}}})
+        self.assertEqual(self.run_protect(repo="o/other"), 0)
+        rules = self.rules(self.calls[-1][2])
+        self.assertNotIn("required_status_checks", rules)  # o/r's settings are not carried over
+        self.assertEqual(json.loads(self.config.read_text())["github"]["protection"]["approvals"], 1)
+
     def test_check_mode(self):
         self.assertEqual(self.run_protect(check=True), 1)
         self.assertEqual(self.run_protect(check=True, existing=[{"id": 7, "name": fw.RULESET_NAME}]), 0)
