@@ -60,6 +60,7 @@ framework import to an existing `CLAUDE.md` and never overwrites your files.
 | `/fw-plan` | Capacity, estimates, roadmap |
 | `/fw-team` | Design or revise the agent team |
 | `/fw-brief` | Write or revise the product brief |
+| `/fw-retro` | Milestone retrospective: calibrate estimates, turn recurring review findings into rules |
 | `/fw-docs` | Re-sync docs with the code, optional GitHub Pages |
 | `/fw-doctor` | Machine and GitHub access check |
 | `/fw-update` | Pull the latest framework version |

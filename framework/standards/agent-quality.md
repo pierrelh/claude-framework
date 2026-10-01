@@ -15,7 +15,8 @@ so the result is good even when the user is not a developer.
    read-only (`Read, Grep, Glob, Bash`) — they report, they don't fix.
 4. **Grounded in this project.** Reference real paths, real commands (`CLAUDE.md →
    Commands`; implementers and QA run the quality gate with `framework/bin/fw check`), real
-   conventions. Generic advice ("write clean code") is noise.
+   conventions. Reviewers check every rule of `.claude/review-rules.md` (built by
+   `/fw-retro` from recurring findings) and implementers read it before coding. Generic advice ("write clean code") is noise.
 5. **Current, not remembered.** Versions, APIs and best practices of the stack are checked
    against official documentation at creation time (web search/fetch when available), and
    written down with the date checked. Never hard-code what a file in the repo already says —

@@ -3,6 +3,33 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.7.0 — 2026-10-01
+### Added
+- Time is measured per phase: `fw start`, `fw review` and `fw escalate` log a timeline in
+  `.fw/local/timers.json`; `fw done` records **Actual (h)** = agent working time and the new
+  **Wait (h)** = time waiting on a human; `fw done --rounds N` records the new
+  **Review rounds** field.
+- `fw metrics [--milestone] [--json]`: agent estimate vs actual by size, type and agent,
+  review rounds, waits, outliers.
+- `/fw-retro [milestone]`: retrospective from the metrics and the review findings of the
+  milestone's PRs → proposals (estimate calibration noted in `CLAUDE.md`, rules in the
+  project's `.claude/review-rules.md`, agent edits through `/fw-team`, process changes),
+  each approved by the user, recorded in `docs/retros/`.
+### Changed
+- **Actual (h)** used to be wall-clock time from `fw start` to `fw done` (it included waiting
+  for the merge); it is now agent working time, and accuracy compares it with **Agent
+  effort** only (not effort + human review). Old timer entries are still read.
+- `/fw-work`: reviewers check `.claude/review-rules.md`, implementers read it; every review
+  finding (`category — finding`) and the number of rounds go into the PR (new *Review
+  findings* section of the PR template); `fw done --rounds`; suggests `/fw-retro` when a
+  milestone completes.
+- `/fw-backlog` and `/fw-plan` apply the calibration notes of `CLAUDE.md`.
+### Upgrading from an older version
+- Re-run `framework/bin/fw github-setup` once to add the *Wait (h)* and *Review rounds*
+  fields to the project (until then `fw done` skips them with a warning).
+- `.github/pull_request_template.md` is a project file: copy the *Review findings* section
+  from the template if you want it.
+
 ## 0.6.0 — 2026-10-01
 ### Added
 - `.fw/config.json → commands` (`install`, `lint`, `typecheck`, `test`, `build`): one

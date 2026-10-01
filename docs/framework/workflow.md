@@ -38,8 +38,11 @@ Describe a feature or a bug in your words; the agent checks for duplicates, writ
 qualified items attached to the right epic, estimates them and re-plans.
 
 ## 4. Estimates
-Hours of agent work + hours of your review, sizes XS–L (XL must be split). Actual time is
-recorded when a story is done, and `/fw-status` shows how accurate estimates are. Tasks only
+Hours of agent work + hours of your review, sizes XS–L (XL must be split). When a story is
+done, its agent working time and the time it waited on you are recorded separately;
+`/fw-status` shows how accurate estimates are, and `/fw-retro` reviews each milestone:
+estimates by size/type/agent, review rounds, recurring review findings → calibration, review
+rules (`.claude/review-rules.md`) and agent improvements, each approved by you. Tasks only
 you can do are `owner: human` (they don't take agent time) and can carry `wait_days` for
 calendar waiting (store review, account approval).
 

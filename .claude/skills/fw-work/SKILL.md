@@ -38,20 +38,25 @@ has no agent, do that step yourself, briefly.
    decide with a reasonable, reversible assumption, it posts the assumption as an issue
    comment and continues; otherwise escalate (see below).
 4. **Implement** (the agent in the issue's *Agent* field, else the first implementer):
-   tests first where practical, then code, following `CLAUDE.md`. It must run
+   tests first where practical, then code, following `CLAUDE.md` and `.claude/review-rules.md`
+   (when present — the rules reviewers will check). It must run
    `framework/bin/fw check` (the project's lint/typecheck/test/build commands) and finish green.
    `STATUS: BLOCKED` → escalate.
 5. **Review** on `git diff <default>...HEAD` by **every** agent listed in `roles.review` (a
    string or a list — e.g. a code reviewer and a security reviewer), run in parallel. The
-   step passes only when **all** return `VERDICT: APPROVE`. Any `CHANGES_REQUESTED` → send
-   the merged findings back to the implementer; max **3** review rounds, then escalate.
+   step passes only when **all** return `VERDICT: APPROVE`. Reviewers also check every rule
+   of `.claude/review-rules.md` (when present). Any `CHANGES_REQUESTED` → send the merged
+   findings back to the implementer; max **3** review rounds, then escalate. Keep every
+   finding (`category — one line`, e.g. `security — SQL built by concatenation in
+   OrderRepository`) and count the rounds: both go into the PR and feed `/fw-retro`.
 6. **QA** (qa agent): run `framework/bin/fw check` and verify every acceptance criterion with
    evidence (test names, command output, observed behaviour). `QA: FAIL` → back to step 4 (counts as a review round).
 7. **Docs** (docs agent): update `docs/` and `CLAUDE.md` if behaviour, commands,
    conventions or architecture changed; ADR for significant decisions. `fw docs-check`.
 8. **PR**: commit (Conventional Commits, `(#<n>)`), push the branch, `gh pr create` with the
    template filled: summary, `Closes #<n>`, acceptance-criteria checklist with QA evidence,
-   review verdict, tests run, docs updated, estimate vs actual. Then
+   review verdict, **review findings** (all rounds, `category — finding`, or "none"), review
+   rounds, tests run, docs updated, estimate vs actual. Then
    `framework/bin/fw review <n>`.
 9. **CI**: if the repo has workflows, `gh pr checks <pr> --watch` (fail → back to step 4). CI
    runs the same `fw check` as the agents, so a red CI that was green locally points at the
@@ -61,11 +66,15 @@ has no agent, do that step yourself, briefly.
     - assisted: give the PR link and a 3-line summary; ask with the prefix
       `[fw:approval merge #<n> pr #<pr>]` and merge only when the user says so (or they merge
       on GitHub). Headless: `fw escalate <n> --kind approval --pr <pr> …` and move on.
-11. **Close the loop**: `git checkout <default> && git pull`; `framework/bin/fw done <n>`
-    (records actual hours, unblocks dependents, closes the epic when complete);
+11. **Close the loop**: `git checkout <default> && git pull`; `framework/bin/fw done <n>
+    --rounds <review rounds>` (records agent hours and waiting time — measured from
+    `fw start` / `fw review` / `fw escalate` on this machine —, unblocks dependents, closes
+    the epic when complete);
     `framework/bin/fw schedule --apply --markdown docs/product/roadmap.md` (the snapshot is
     committed with the next PR).
-12. **Continue?** auto + `all`/N: next item. Assisted: ask.
+12. **Continue?** auto + `all`/N: next item. Assisted: ask. When the item closed the last
+    open item of a milestone, suggest `/fw-retro <milestone>` (auto mode: run it at the end of
+    the run, proposals wait for the user).
 
 ## Escalation — stop the item, never guess
 Follow `framework/standards/escalation.md`: `framework/bin/fw escalate <n> --kind

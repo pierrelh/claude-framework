@@ -7,8 +7,12 @@ Closes #
 <!-- One line per criterion of the issue, with the evidence (test name, command output, observation). -->
 - [ ] …
 
+## Review findings
+<!-- Every finding of every review round, one line each: `category — finding` (or "none"). Feeds /fw-retro. -->
+- …
+
 ## Quality gates
-- Review: <!-- VERDICT: APPROVE / reviewer agent name -->
+- Review: <!-- VERDICT: APPROVE / reviewer agent name, after N round(s) -->
 - QA: <!-- QA: PASS -->
 - Tests run: <!-- commands and result -->
 - Docs updated: <!-- files, or "none needed" -->

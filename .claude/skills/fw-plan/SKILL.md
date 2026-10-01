@@ -21,8 +21,10 @@ Save with `framework/bin/fw config set capacity.hours_per_day 8` etc.
 - Items without estimates (e.g. imported issues): estimate them from their content with the
   scale and multipliers, then `framework/bin/fw set-field <n> "Agent effort (h)" <h>`,
   `… "Human review (h)" <h>`, `… Size <S>`.
-- `framework/bin/fw status` shows the actual/estimated ratio: if it drifts beyond ±30 % over
-  5+ done items, propose scaling the remaining estimates and explain why.
+- `framework/bin/fw status` shows the actual/estimated ratio (`fw metrics` by size, type and
+  agent): if it drifts beyond ±30 % over 5+ done items, propose scaling the remaining
+  estimates and explain why. Apply the calibration notes of `CLAUDE.md` (written by
+  `/fw-retro`) to any new or revised estimate.
 - Present the riskiest estimates and let the user challenge them; apply changes with
   `set-field`.
 
