@@ -29,6 +29,15 @@ GitHub's API cannot create project views. After setup, open the project and add:
 in `framework.template_project` of the template's `.fw/config.json`. New projects are then
 *copied* from it (views included) instead of created empty.
 
+## Branch protection
+`framework/bin/fw protect` creates (or updates) a repository ruleset named
+`fw: protect the default branch`: pull request required, no force push, no deletion, no
+bypass actors. Options: `--checks "test,lint"` to require CI checks (kept on later runs),
+`--approvals N` (default 0 — you and the agents share one account, and GitHub does not let
+an author approve their own pull request). `fw protect --check` and `fw doctor` report
+whether it is in place. Rulesets need admin rights, and private repositories need GitHub
+Pro/Team (exit code 4 otherwise); the local guard hook applies either way.
+
 ## Re-running the setup
 `fw github-setup` saves the project in `.fw/config.json` as soon as it exists, so a failure
 later in the setup never leaves an orphan project: re-run the same command and it reuses it.

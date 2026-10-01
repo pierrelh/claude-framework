@@ -488,6 +488,13 @@ def cmd_doctor(a):
     repo["project_files"] = len(code)
     repo["project_files_sample"] = code[:15]
 
+    gh_repo = dig(cfg(), "github.repo")
+    if repo["initialized"] and gh_repo and login:
+        readable, ruleset = find_ruleset(gh_repo)
+        add("branch-rules", bool(ruleset) if readable else None,
+            "default branch protected" if ruleset else ("not protected" if readable else "cannot read rulesets"),
+            "framework/bin/fw protect", required=False)
+
     ok = all(c["ok"] for c in checks if c["required"])
     if a.json:
         print(json.dumps({"ok": ok, "login": login, "checks": checks, "repo": repo}, indent=2))
@@ -683,6 +690,80 @@ def views_report(pid):
                   "Group by: Milestone (or Item type). Rename it 'Roadmap'.")
     print("  then re-run `fw views-check`.")
     return False
+
+
+RULESET_NAME = "fw: protect the default branch"
+
+
+def api_try(method, path, body=None):
+    """Like rest() but returns (ok, data | error text) instead of dying."""
+    args = ["api", "-X", method, path] + (["--input", "-"] if body is not None else [])
+    p = gh(*args, check=False, input=json.dumps(body) if body is not None else None)
+    if p.returncode != 0:
+        return False, (p.stderr or p.stdout).strip()
+    return True, json.loads(p.stdout) if p.stdout.strip() else {}
+
+
+def protection_ruleset(checks, approvals):
+    rules = [
+        {"type": "deletion"},
+        {"type": "non_fast_forward"},
+        {"type": "pull_request", "parameters": {
+            "required_approving_review_count": approvals, "dismiss_stale_reviews_on_push": False,
+            "require_code_owner_review": False, "require_last_push_approval": False,
+            "required_review_thread_resolution": False}},
+    ]
+    if checks:
+        rules.append({"type": "required_status_checks", "parameters": {
+            "strict_required_status_checks_policy": False,
+            "required_status_checks": [{"context": c} for c in checks]}})
+    return {"name": RULESET_NAME, "target": "branch", "enforcement": "active", "bypass_actors": [],
+            "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"], "exclude": []}}, "rules": rules}
+
+
+def find_ruleset(repo):
+    ok, data = api_try("GET", f"repos/{repo}/rulesets")
+    if not ok:
+        return False, data
+    return True, next((r for r in data if r.get("name") == RULESET_NAME), None)
+
+
+def cmd_protect(a):
+    c = cfg()
+    repo = a.repo or dig(c, "github.repo")
+    if not repo:
+        die("no repository — pass --repo owner/name or run `fw github-setup` first")
+    ok, current = find_ruleset(repo)
+    if a.check:
+        if not ok:
+            print(f"! cannot read the rulesets of {repo}: {current}")
+            sys.exit(1)
+        print(f"✔ {repo}: default branch protected (ruleset #{current['id']})" if current
+              else f"✘ {repo}: default branch not protected — run `framework/bin/fw protect`")
+        sys.exit(0 if current else 1)
+    prot = dig(c, "github.protection", {}) or {}
+    checks = prot.get("checks", []) if a.checks is None else [x.strip() for x in a.checks.split(",") if x.strip()]
+    approvals = prot.get("approvals", 0) if a.approvals is None else a.approvals
+    body = protection_ruleset(checks, approvals)
+    if ok and current:
+        ok, res = api_try("PUT", f"repos/{repo}/rulesets/{current['id']}", body)
+    elif ok:
+        ok, res = api_try("POST", f"repos/{repo}/rulesets", body)
+    else:
+        res = current
+    if not ok:
+        plan = re.search(r"upgrade|GitHub Pro|not available|HTTP 403", res, re.I)
+        print(f"✘ could not protect the default branch of {repo}: {res}")
+        if plan:
+            print("  Branch rules are not available for private repositories on GitHub Free (and need admin rights).\n"
+                  "  The local guard hook still blocks direct pushes to main, but nothing enforces it on GitHub.\n"
+                  "  Options: GitHub Pro/Team, a public repository, or accept the risk.")
+        sys.exit(4)
+    c.setdefault("github", {})["protection"] = {"ruleset_id": res.get("id"), "checks": checks, "approvals": approvals}
+    save_json(CONFIG, c)
+    print(f"✔ {repo}: default branch protected — pull request required ({approvals} approval(s)), "
+          f"no force push, no deletion, no bypass"
+          + (f", required checks: {', '.join(checks)}" if checks else ", no required checks yet"))
 
 
 def cmd_views_check(a):
@@ -1757,9 +1838,9 @@ def merge_settings(src, dst_path):
     dst = load_json(dst_path, {})
     for event, entries in (src.get("hooks") or {}).items():
         cur = dst.setdefault("hooks", {}).setdefault(event, [])
-        known = {h.get("command") for e in cur for h in e.get("hooks", [])}
+        known = {(e.get("matcher"), h.get("command")) for e in cur for h in e.get("hooks", [])}
         for e in entries:
-            if not any(h.get("command") in known for h in e.get("hooks", [])):
+            if not any((e.get("matcher"), h.get("command")) in known for h in e.get("hooks", [])):
                 cur.append(e)
     for kind in ("allow", "deny"):
         rules = (src.get("permissions") or {}).get(kind) or []
@@ -1892,6 +1973,14 @@ def main():
     s.add_argument("--fix-status", action="store_true",
                    help="(re)apply the Backlog/Ready/In progress/In review/Done columns, keeping item statuses")
     s.set_defaults(fn=cmd_github_setup)
+
+    s = sub.add_parser("protect", help="protect the default branch on GitHub (ruleset: PR required, no force push)")
+    s.add_argument("--repo", help="owner/name (default: github.repo from the config)")
+    s.add_argument("--checks", help="comma-separated required status checks (default: keep the configured ones)")
+    s.add_argument("--approvals", type=int, help="required approving reviews (default 0: the agent and you share "
+                                                  "one account, and GitHub forbids approving your own PR)")
+    s.add_argument("--check", action="store_true", help="only report whether the ruleset exists")
+    s.set_defaults(fn=cmd_protect)
 
     s = sub.add_parser("views-check", help="verify the Board and Roadmap views exist")
     s.set_defaults(fn=cmd_views_check)

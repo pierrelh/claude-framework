@@ -3,6 +3,31 @@
 Framework versions (`framework/VERSION`). `/fw-update` shows the entries between your version
 and the upstream one. "Contract" = the machine-readable interface (`fw schema`, `--json`).
 
+## 0.4.0 — 2026-10-01
+### Added
+- `fw protect`: GitHub ruleset on the default branch — pull request required, no force push,
+  no deletion, no bypass actors; `--checks` for required CI checks, `--approvals`,
+  `--check`. Run by `/fw-init` after the first push; `fw doctor` reports it (`branch-rules`).
+- The guard also covers Edit / Write / MultiEdit / NotebookEdit: once initialized,
+  framework-owned files and `.fw/state.json` are read-only (also through `>`, `tee`,
+  `sed -i`, `cp`, `mv`, `rm`).
+- New guard rules: `rm -r -f` in any flag order, `.` and top-level directories,
+  `--no-preserve-root`; `+refspec` and `--mirror` pushes, deleting main, `--no-verify`,
+  `git clean -f`, `git reset --hard` over uncommitted changes, `git branch -D main`;
+  `gh pr merge --admin`, `gh repo edit --visibility`, `gh api` repository deletion and
+  branch-protection changes; recursive `chown`; `TRUNCATE` / unfiltered `DELETE` sent to a
+  database client, `dropdb`, `mysqladmin drop`, Redis flushes.
+### Changed
+- The guard parses commands instead of matching raw text: a commit message, a PR body or a
+  heredoc that only *mentions* a dangerous command is no longer blocked. `sudo`, `env`,
+  `bash -c`, `eval` and `$(…)` are unwrapped.
+- **Breaking:** `FW_ALLOW_MAIN_PUSH=1` is gone (any command could set it). A direct push to
+  main is allowed only when the remote has no main/master yet, i.e. the first push of a new
+  repository; an unreachable remote counts as "has one". `/fw-init` adoption now lands its
+  commit through a `chore/fw-init` pull request.
+- `fw update` / `fw install` merge hooks by (matcher, command), so a hook command reused
+  under a new matcher reaches existing projects.
+
 ## 0.3.1 — 2026-10-01
 ### Added
 - Test suite extended to backlog validation, the `fw done` cascade, `install` / `update` on
