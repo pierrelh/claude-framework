@@ -159,10 +159,11 @@ Only for ready items with no dependency between them and no overlapping files. R
 implementer with `isolation: "worktree"`, one branch/PR per item; review, QA and merge stay
 sequential; rebase the later branches after each merge.
 
-## Stopping — `fw stop`, "stop", "pause", or Esc then "stop"
-The user can stop a run at any time: `framework/bin/fw stop` from another terminal (`--now`:
-don't wait for background reviews; `--remote`: also for cloud runs and other machines), or by
-saying so in the session. Check `framework/bin/fw stop --check` (exit 1 = stop requested;
+## Stopping — "stop" typed during the run, `fw stop`, or Esc then `/fw-stop`
+The user can stop a run at any time: by writing "stop" / "pause" while it works (Claude Code
+delivers a plain-text message between two tool calls — treat it as `/fw-stop`), with
+`framework/bin/fw stop` from another terminal (`--now`: don't wait for background reviews;
+`--remote`: also for cloud runs and other machines), or with Esc then `/fw-stop`. Check `framework/bin/fw stop --check` (exit 1 = stop requested;
 cheap, local — headless runs also look at the repository variable) **before picking an item,
 after every agent returns, and before every merge**. While a stop is pending the guard refuses
 new agents, `fw start`, `fw rework`, `fw worktree add` and `gh pr merge` — that is expected.

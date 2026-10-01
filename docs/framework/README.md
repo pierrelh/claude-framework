@@ -20,6 +20,7 @@ requests and keep this documentation up to date.
 | Sort incoming issues from users or teammates | `/fw-triage` |
 | Ship a version | `/fw-release` |
 | Fix something urgent | label the bug `hotfix` (or ask `/fw-triage`), then `/fw-work` |
+| Stop the agents / continue later | `/fw-stop` · `/fw-resume` |
 | Learn from a finished milestone | `/fw-retro` |
 | Refresh the docs | `/fw-docs` |
 | Check your machine / GitHub access | `/fw-doctor` |

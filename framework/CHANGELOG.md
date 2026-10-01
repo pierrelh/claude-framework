@@ -17,7 +17,9 @@ and the upstream one. "Contract" = the machine-readable interface (`fw schema`, 
 - `fw resume <n>` takes a paused item back (timer resumed, comment turned into "▶ Resumed");
   `fw resume` shows checkpoints and the story worktrees; `fw resume --run` the paused run.
   `/fw-work resume` continues the run; `/fw-work` → *Stopping* / *Resuming*.
-- Framework rule 7: "stop" / "pause" in a session follows the same procedure.
+- `/fw-stop [now] [remote]` and `/fw-resume` skills. Mid-run, type `stop` as plain text
+  (Claude Code hands it over between two tool calls; a queued slash command would only run
+  after the whole run); Esc then `/fw-stop` stops immediately. Framework rule 7.
 ### Upgrading from an older version
 - `framework/bin/fw migrate` adds the guard hook on Agent / Task launches to
   `.claude/settings.json` (migration 0.10.0).

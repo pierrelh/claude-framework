@@ -22,7 +22,7 @@ computer: useful when your machine is off, or to let a tool or app start work re
 One run at a time per repository (later dispatches wait in the queue).
 To stop a cloud run cleanly: `framework/bin/fw stop --remote` (sets the `FW_STOP` repository
 variable; the run checkpoints its items and ends — see [autonomy](autonomy.md#stopping-a-run)),
-then `framework/bin/fw stop --clear --remote` before the next run. Cancelling the workflow on
+then `framework/bin/fw stop --clear --remote` before the next run (`/fw-resume` continues it). Cancelling the workflow on
 GitHub stops it immediately, without checkpoints.
 
 ## When an agent has a question
